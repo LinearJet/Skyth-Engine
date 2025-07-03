@@ -1,0 +1,15 @@
+Flask
+flask-cors
+requests
+python-dotenv
+duckduckgo-search
+beautifulsoup4
+selenium
+trafilatura
+youtube-transcript-api
+edge-tts
+pypdf
+pydub
+SpeechRecognition
+pillow
+google-generativeai
