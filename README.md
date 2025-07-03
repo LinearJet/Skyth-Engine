@@ -1,5 +1,7 @@
 **SKYTH Engine**
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Overview
 SKYTH is an advanced AI-powered web application designed to deliver real-time research, dynamic visualizations, deep insights, and voice synthesis capabilities. It integrates multiple AI models and tools to provide a robust platform for information retrieval, content generation, and interactive experiences. The application is built with Flask, leveraging a modular architecture to handle web scraping, natural language processing, image generation, and more.
 Features
