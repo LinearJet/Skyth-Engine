@@ -13,3 +13,4 @@ pydub
 SpeechRecognition
 pillow
 google-generativeai
+gunicorn
