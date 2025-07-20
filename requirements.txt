@@ -2,10 +2,9 @@ Flask
 flask-cors
 requests
 python-dotenv
-duckduckgo-search
+ddgs
 beautifulsoup4
 selenium
-trafilatura
 youtube-transcript-api
 edge-tts
 pypdf
@@ -13,4 +12,9 @@ pydub
 SpeechRecognition
 pillow
 google-generativeai
-gunicorn
+Authlib
+tinydb
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+Flask-Session
