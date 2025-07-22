@@ -1,124 +1,173 @@
-**SKYTH Engine**
+# SKYTH Engine
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python Version](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Framework](httpshttps://img.shields.io/badge/Framework-Flask-red.svg)](https://flask.palletsprojects.com/)
 
-Overview
-SKYTH is an advanced AI-powered web application designed to deliver real-time research, dynamic visualizations, deep insights, and voice synthesis capabilities. It integrates multiple AI models and tools to provide a robust platform for information retrieval, content generation, and interactive experiences. The application is built with Flask, leveraging a modular architecture to handle web scraping, natural language processing, image generation, and more.
-Features
+**SKYTH** is a sophisticated, agentic AI web application engineered for real-time research, dynamic multimodal interaction, and deep content analysis. It leverages a powerful, modular pipeline architecture driven by LLM-based routing to intelligently handle a wide array of user queries. From generating interactive data visualizations and detailed research reports to analyzing images and synthesizing voice, SKYTH provides a comprehensive and extensible platform for advanced AI-powered experiences.
 
-Real-Time Research: Utilizes DuckDuckGo search, YouTube video search, and web scraping (via BeautifulSoup, Trafilatura, and Selenium) to fetch and analyze information.
-Multimodal AI: Supports text, image, and file analysis using Google Gemini models for conversational, reasoning, visualization, and image generation tasks.
-Dynamic Visualizations: Generates interactive HTML5 canvas visualizations using p5.js for mathematical, scientific, or general data representations.
-Voice Synthesis: Integrates Microsoft Edge TTS for text-to-speech streaming.
-Deep Research Pipeline: Conducts comprehensive research with automated source analysis, visual content curation, and report generation in HTML, Markdown, and PDF formats.
-Discover Page: Curates trending news topics and articles with a tiered scraping system for fast and reliable content extraction.
-File Handling: Supports image uploads, audio transcription (via SpeechRecognition), and PDF content analysis (via pypdf).
-Customizable Interface: Offers user personalization with themes, profile pictures, and custom personas.
+<br>
+<p align="center">
+  <img src="https://i.imgur.com/your-placeholder-image.gif" alt="SKYTH Engine Demo" width="80%">
+  <br>
+  <em>(Placeholder for an animated GIF showcasing the UI)</em>
+</p>
+<br>
 
-Prerequisites
+---
 
-Python 3.8+: Ensure Python is installed on your system.
-Chromedriver: Required for Selenium-based scraping. Must be compatible with your installed Chrome browser version and added to your system PATH.
-FFmpeg: Required for audio processing with pydub. Install it and ensure it's accessible in your system PATH.
-API Keys:
-Google Gemini API Key: Set the `GEMINI_API_KEY` environment variable for conversational, reasoning, visualization, and image generation models.
+## ✨ Key Features
 
+SKYTH is packed with features that go beyond a simple chatbot, creating a versatile tool for information discovery and creation.
 
-Dependencies: Install all required Python packages listed in requirements.txt.
+-   **🧠 Agentic Core:** At its heart, SKYTH uses an LLM-based router to analyze user intent and dynamically select the most appropriate tool or pipeline, moving beyond simple keyword matching.
+-   **📚 Multi-Layered Memory:** A persistent, multi-component memory system (`Core`, `Episodic`, `Semantic`, `Resource`) allows the AI to learn user preferences and maintain context across conversations.
+-   **🌐 Real-Time Research:**
+    -   **Standard Research:** Executes an LLM-planned, multi-step search strategy using DuckDuckGo for comprehensive answers.
+    -   **Deep Research:** Scrapes and analyzes multiple web sources using `Trafilatura`, `BeautifulSoup`, and `Selenium` to automatically generate detailed, styled HTML reports, complete with embedded media and a downloadable PDF version.
+-   **🎨 Dynamic & Multimodal Interaction:**
+    -   **Image Analysis:** Understands and answers questions about user-uploaded images.
+    -   **Image Editing:** Edits images based on user prompts (e.g., "add a hat to the person").
+    -   **Image Generation:** Creates new images from text descriptions using Google's Gemini models.
+    -   **File Analysis:** Extracts and analyzes text from PDFs and other documents.
+    -   **Voice Synthesis:** Provides streaming text-to-speech audio using Microsoft Edge's high-quality neural voices.
+    -   **Audio Transcription:** Transcribes user-uploaded audio files.
+-   **📊 Interactive Visualizations:**
+    -   **Data & Math:** Generates interactive HTML5 Canvas visualizations (using `p5.js`) for mathematical functions, physics concepts, or data.
+    -   **Financial Data:** Fetches and displays real-time stock data in interactive `Chart.js` graphs.
+-   **💻 Coding & HTML Assistant:**
+    -   **Code Generation:** Writes, explains, and debugs code in various languages.
+    -   **Live Previews:** Renders HTML, CSS, and JavaScript code directly in an `iframe` for immediate visual feedback.
+-   **📰 Discover Page:** A built-in news aggregator that scrapes and displays articles from various categories, with a personalized "For You" section that learns from user interactions.
+-   **👤 User-Centric Experience:**
+    -   **Personas:** Switch between different AI personalities (e.g., `Academic`, `Coding`, `Unhinged`) for tailored responses.
+    -   **Full Chat Management:** Secure user authentication (Google OAuth) with persistent, renameable, and deletable chat histories stored in a local SQLite database.
 
-Installation
+---
 
-Clone the Repository:
-`git clone https://github.com/LinearJet/Skyth-Engine.git
-&&  cd skyth`
+## 🛠️ Technology Stack
 
+| Component         | Technology/Library                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Backend**       | `Flask`, `Python 3.8+`                                                                                                         |
+| **AI Models**     | `Google Gemini` (Flash, Pro, Vision, Image Generation)                                                                         |
+| **Web Scraping**  | `Selenium`, `BeautifulSoup4`, `trafilatura`                                                                                    |
+| **Web Search**    | `duckduckgo-search`                                                                                                            |
+| **Databases**     | `SQLite` (for chat history & memory), `TinyDB` (for user sessions)                                                             |
+| **Frontend**      | `HTML5`, `CSS3`, `JavaScript`, `Marked.js`, `Highlight.js`, `Anime.js`, `MathJax`                                              |
+| **Visualizations**| `p5.js` & `Chart.js` (via dynamic HTML generation)                                                                             |
+| **Stock Data**    | `Node.js`, `yahoo-finance2`                                                                                                    |
+| **Audio**         | `edge-tts` (TTS), `SpeechRecognition` & `pydub` (Transcription)                                                                |
+| **File Parsing**  | `pypdf` (PDFs)                                                                                                                 |
+| **Authentication**| `Authlib` (Google OAuth)                                                                                                       |
 
-Set Up a Virtual Environment (recommended):
-`python -m venv venv`
-`source venv/bin/activate  # On Windows: venv\Scripts\activate`
+---
 
+## 🚀 Getting Started
 
-Install Dependencies:
-``pip install -r requirements.txt``
+Follow these steps to get your own instance of the SKYTH Engine running locally.
 
+### Prerequisites
 
-Configure Environment Variables:Create a .env file in the project root and add your API key:
-`GEMINI_API_KEY=your-gemini-api-key
-PORT=5000  # Optional: specify the port for Flask`
+-   **Python 3.8+**: Ensure Python and `pip` are installed and accessible from your terminal.
+-   **Node.js**: Required for the stock data fetching script. Install it from [nodejs.org](https://nodejs.org/).
+-   **Chrome & Chromedriver**: Required for Selenium-based scraping. The Chromedriver version must match your installed Chrome browser. Download it from the [Chrome for Testing availability dashboard](https://googlechromelabs.github.io/chrome-for-testing/) and ensure it's in your system's `PATH`.
+-   **FFmpeg**: Required for audio processing (`pydub`). Install it from [ffmpeg.org](https://ffmpeg.org/download.html) and ensure `ffmpeg` and `ffprobe` are in your system's `PATH`.
+-   **API Keys**:
+    -   **Google Gemini API Key**: The application relies heavily on Gemini for its core functionalities. Get a key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
+### Installation
 
-Install Chromedriver:
+1.  **Clone the Repository:**
+    ```bash
+    git clone https://github.com/LinearJet/Skyth-Engine.git
+    && cd Skyth-Engine
+    ```
 
-Download the appropriate Chromedriver version for your Chrome browser from here.
-Add Chromedriver to your system PATH or place it in the project directory.
+2.  **Set Up a Virtual Environment (Recommended):**
+    ```bash
+    # For Unix/macOS
+    python3 -m venv venv
+    source venv/bin/activate
 
+    # For Windows
+    python -m venv venv
+    venv\Scripts\activate
+    ```
 
-Install FFmpeg:
+3.  **Install Python Dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-Download and install FFmpeg from ffmpeg.org.
-Ensure ffmpeg and ffprobe are accessible in your system PATH.
+4.  **Install Node.js Dependencies:**
+    The stock data script uses a Node.js library. Navigate to the project root and run:
+    ```bash
+    npm install yahoo-finance2
+    ```
 
+5.  **Configure Environment Variables:**
+    Create a `.env` file in the project root and add your API keys and a secret key for Flask sessions.
+    ```env
+    # .env
+    GEMINI_API_KEY=your-gemini-api-key
+    SECRET_KEY=generate-a-super-secret-random-string-here
+    PORT=5000
+    
+    # For Google OAuth (Optional, but required for user login)
+    GOOGLE_CLIENT_ID=your-google-client-id
+    GOOGLE_CLIENT_SECRET=your-google-client-secret
+    ```
 
+### Running the Application
 
-Running the Application
+1.  **Initialize the Database:**
+    The application will automatically create and initialize the `memory.db` SQLite database on the first run.
 
-Start the Flask Server:
-`python app.py`
+2.  **Start the Flask Server:**
+    ```bash
+    python app.py
+    ```
+    The server will start on `http://127.0.0.1:5000` (or the port specified in your `.env` file).
 
-The server will run on http://127.0.0.1:5000 by default (or the port specified in the .env file).
+3.  **Access the Application:**
+    Open your web browser and navigate to `http://127.0.0.1:5000`. You can now start interacting with the SKYTH Engine.
 
-Access the Application:
+---
 
-Open a web browser and navigate to http://127.0.0.1:5000.
-Explore the homepage, discover trending topics, or interact with the AI through the search endpoint.
+## 📜 License
 
+This project is licensed under the **MIT License**.
 
+The MIT License is a permissive free software license originating at the Massachusetts Institute of Technology (MIT). As a permissive license, it puts only very limited restrictions on reuse and has, therefore, high license compatibility.
 
-Usage
+You are free to:
+-   **Share**: copy and redistribute the material in any medium or format.
+-   **Adapt**: remix, transform, and build upon the material for any purpose, even commercially.
 
-Homepage (/): Displays the main interface with options to enter queries, view popular topics, and customize the user experience.
-Discover Page (/discover): Browse curated articles across categories like Sports, Technology, and Entertainment.
-API Endpoints:
-/api/parse_article: POST a URL to extract article content using Trafilatura or BeautifulSoup.
-/api/upload_image: POST an image file to receive a Base64-encoded data URI for analysis.
-/api/transcribe_audio: POST an audio file to transcribe it using SpeechRecognition and Google’s speech-to-text API.
-/api/tts: POST text and a persona to generate streaming text-to-speech audio using Edge TTS.
-/popular_topics: GET trending news topics, cached for performance.
-/fetch_articles/<category>: GET articles for a specific category (e.g., Technology, Sports).
-/get_full_article: POST a URL to scrape full article content using a tiered scraping system.
-/track_interaction: POST user interactions to improve the "For You" category recommendations.
+Under the following terms:
+-   **Attribution**: You must give appropriate credit, provide a link to the license, and indicate if changes were made. You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
 
+See the [LICENSE file](https://opensource.org/licenses/MIT) for the full text.
 
+---
 
-Project Structure
+## 🤝 Contributing
 
-app.py: Main Flask application with routing, AI pipelines, and scraping logic.
-index.html: Frontend template for the main interface, including personalization and interaction features.
-requirements.txt: List of Python dependencies.
-static/: Static assets like favicon.ico and robots.txt.
-templates/: HTML templates for rendering pages.
-memory.db: SQLite database for storing query history (created automatically on first run).
+Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
 
-Notes
+If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
 
-Performance: The application uses caching for article lists and trending topics to reduce API calls and improve response times.
-Error Handling: Robust error handling is implemented for scraping, API calls, and file processing. Check logs for detailed error messages.
-Dependencies: Ensure all dependencies in requirements.txt are installed. Some features (e.g., audio transcription) require external tools like FFmpeg.
-API Key Security: Store your Gemini API key securely in the .env file and avoid committing it to version control.
-Selenium: Requires a compatible Chromedriver. If you encounter issues, verify the Chromedriver version and PATH configuration.
-Audio Transcription: The /api/transcribe_audio endpoint uses Google’s free speech-to-text API via SpeechRecognition. Ensure FFmpeg is installed for audio format conversion.
+1.  Fork the Project
+2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the Branch (`git push origin feature/AmazingFeature`)
+5.  Open a Pull Request
 
-Limitations
+---
 
-API Key Dependency: The application requires a valid Google Gemini API key for most AI functionalities.
-Selenium Performance: Selenium-based scraping can be slow and resource-intensive; it’s used as a fallback for robust content extraction.
-Audio Transcription: Relies on Google’s web-based speech recognition, which may have limitations in noisy environments or with certain audio formats.
-Image Generation: Currently uses Gemini for image generation, with Pollinations.ai as a fallback. Some prompts may be rejected due to content policies.
-Browser Compatibility: Visualizations and HTML previews are designed for modern browsers (Chrome, Firefox, Edge).
+## 📞 Contact
 
-Contributing
-Contributions are welcome! Please submit a pull request or open an issue for bug reports, feature requests, or improvements.
-License
-This project is licensed under the MIT License. See the LICENSE file for details.
-Contact
-For support or inquiries, contact the project maintainers via GitHub issues.
+Project Maintainer: [LinearJet](https://github.com/LinearJet)
+
+Project Link: [https://github.com/LinearJet/Skyth-Engine](https://github.com/LinearJet/Skyth-Engine)
