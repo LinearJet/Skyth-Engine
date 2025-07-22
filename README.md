@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Framework](httpshttps://img.shields.io/badge/Framework-Flask-red.svg)](https://flask.palletsprojects.com/)
+
 
 **SKYTH** is a sophisticated, agentic AI web application engineered for real-time research, dynamic multimodal interaction, and deep content analysis. It leverages a powerful, modular pipeline architecture driven by LLM-based routing to intelligently handle a wide array of user queries. From generating interactive data visualizations and detailed research reports to analyzing images and synthesizing voice, SKYTH provides a comprehensive and extensible platform for advanced AI-powered experiences.
 
