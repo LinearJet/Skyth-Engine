@@ -6,13 +6,7 @@
 
 **SKYTH** is a sophisticated, agentic AI web application engineered for real-time research, dynamic multimodal interaction, and deep content analysis. It leverages a powerful, modular pipeline architecture driven by LLM-based routing to intelligently handle a wide array of user queries. From generating interactive data visualizations and detailed research reports to analyzing images and synthesizing voice, SKYTH provides a comprehensive and extensible platform for advanced AI-powered experiences.
 
-<br>
-<p align="center">
-  <img src="https://i.imgur.com/your-placeholder-image.gif" alt="SKYTH Engine Demo" width="80%">
-  <br>
-  <em>(Placeholder for an animated GIF showcasing the UI)</em>
-</p>
-<br>
+
 
 ---
 
