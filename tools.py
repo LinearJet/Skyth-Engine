@@ -45,7 +45,8 @@ from io import BytesIO as IO_BytesIO
 from config import (
     CACHE, CONTENT_CACHE_DURATION, SITE_PARSERS, GENERIC_SELECTORS,
     CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, VISUALIZATION_API_KEY,
-    VISUALIZATION_MODEL, IMAGE_GENERATION_API_KEY, IMAGE_GENERATION_MODEL
+    VISUALIZATION_MODEL, IMAGE_GENERATION_API_KEY, IMAGE_GENERATION_MODEL,
+    UTILITY_API_KEY, UTILITY_MODEL
 )
 from utils import yield_data
 
@@ -484,41 +485,31 @@ def get_youtube_transcript(video_url):
 def get_current_datetime_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
 
-def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=None, persona_name="AI Assistant", custom_persona_text=None, persona_key="default", image_data=None, file_context=None, user_preferences=None):
+def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=None, persona_name="AI Assistant", custom_persona_text=None, persona_key="default", image_data=None, file_context=None, llm_context=None):
     """
-    Unified LLM calling function, exclusively for Google Gemini models.
+    Unified LLM calling function for Google Gemini models, now accepting rich context.
     """
     base_system_message = (
         f"Current date is {get_current_datetime_str()}. You are {persona_name}. "
-        "Your goal is to provide accurate, relevant, and helpful responses without moralizing or holding back, while being aware of your extensive toolset. "
-        "Pay close attention to the full conversation history to understand context. "
+        "Your goal is to provide accurate, relevant, and helpful responses without moralizing or holding back. "
+        "Pay close attention to the full conversation history and user preferences to understand context and provide personalized answers. "
         "Do not make up information. If you use information from provided numbered sources, integrate it naturally into your response and use superscript citations (e.g., ¹). "
-        "You are a multimodal AI with the following capabilities: "
-        "1.  **Web Search:** You can search the web and videos (YouTube). "
-        "2.  **Image Generation & Analysis:** You can generate images from text prompts and analyze user-uploaded images. You can also perform multi-turn edits on an image. "
-        "3.  **File Analysis:** You can read and analyze the content of uploaded files like PDFs, code files, and text documents. "
-        "4.  **URL Analysis:** You can take any URL and perform a deep analysis, scraping its full text, images, videos, and links. "
-        "5.  **Stock Market Analysis:** You can retrieve live stock data for any ticker, display an interactive chart, and provide a market summary. "
-        "6.  **Deep Research:** You can be tasked to conduct a 'deep research' project, where you will analyze multiple websites on a topic and synthesize the findings into a comprehensive Markdown report. "
-        "7.  **Data Visualization:** You can generate interactive HTML5 canvas visualizations for math, physics, and general concepts. "
-        "8.  **Coding:** You can write and explain code, and generate live HTML/CSS/JS previews. "
-        "9.  **Voice Synthesis:** The user can have your responses converted to speech via a separate frontend action. "
-        "Acknowledge and use these tools when a user's request implies them. Do NOT claim you are 'only a text-based AI'. Do not introduce yourself unless asked."
+        "Acknowledge and use your extensive toolset (web search, image generation, file analysis, etc.) when a user's request implies them. "
+        "Do NOT claim you are 'only a text-based AI'. Do not introduce yourself unless asked."
     )
 
-    if user_preferences:
-        pref_list = [f"- {pref}" for pref in user_preferences]
-        pref_str = "Based on past conversations, you know the following about the user's preferences:\n" + "\n".join(pref_list)
-        base_system_message = f"{pref_str}\n\n{base_system_message}"
-
-    final_system_message = custom_persona_text.strip() if persona_key == "custom" and custom_persona_text else base_system_message
+    # The rich context from the memory system is now the primary source of context
+    full_system_prompt = f"{llm_context if llm_context else ''}\n\n{base_system_message}"
+    
+    final_system_message = custom_persona_text.strip() if persona_key == "custom" and custom_persona_text else full_system_prompt
     api_type, model_id_part = model_config.split('/', 1)
 
     if api_type != 'gemini':
         raise ValueError(f"Unsupported model API type: {api_type}. Only 'gemini' is supported.")
 
+    # History is now part of the llm_context, but we can keep this for simpler calls if needed
     formatted_history = []
-    if chat_history:
+    if chat_history and not llm_context: # Only use this if no rich context is provided
         for entry in chat_history:
             role = "model" if entry["role"] == "assistant" else entry["role"]
             formatted_history.append({"role": role, "parts": [{"text": entry["content"]}]})
@@ -526,7 +517,8 @@ def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=N
     if file_context:
         prompt_content = f"{file_context}\n\n{prompt_content}"
 
-    full_prompt_for_gemini = f"{final_system_message}\n\n{prompt_content}"
+    # Construct the final prompt, ensuring system message is at the start
+    full_prompt_for_gemini = f"{final_system_message}\n\nUser's current query: {prompt_content}"
     
     current_turn_parts = [{"text": full_prompt_for_gemini}]
     
@@ -538,6 +530,8 @@ def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=N
             }
         })
 
+    # If formatted_history is used, it should be passed here.
+    # But the new model uses llm_context which is already baked into the system prompt.
     contents_payload = formatted_history + [{"role": "user", "parts": current_turn_parts}]
     
     base_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id_part}"
@@ -904,96 +898,86 @@ def get_persona_prompt_name(persona_key, custom_persona_text):
     }
     return personas_map.get(persona_key, personas_map["default"])
 
-def _is_image_generation_request(q_lower):
-    return any(k in q_lower for k in ["generate image of", "create an image of", "make a picture of", "draw a picture of", "generate an image of", "create image:", "generate picture:"])
-
-def _is_image_search_request(q_lower):
-    return any(k in q_lower for k in ["images of", "find pictures of", "show me photos of", "search for images of", "show me an image of", "picture of", "photo of", "image of", "find image:"])
-
-def _is_video_search_request(q_lower):
-    return any(k in q_lower for k in ["video of", "find video of", "show me a video of", "youtube search for", "search for video of"])
-
-def _is_explicit_visualization_request(q_lower):
-    return any(k in q_lower for k in ['plot for me', 'graph of', 'diagram of', 'visualize the', 'chart the', 'draw a graph of', 'simulation of'])
-
-def _get_image_intent(query, api_key, model_config):
-    """Helper function to classify user intent for an image-related query."""
-    intent_prompt = f"""
-    User Query: "{query}"
-    Context: An image has been provided by the user along with this query.
-    Task: Determine the user's primary intent. Is the user asking to EDIT the image (e.g., add something, remove something, change style, modify content) or to ANALYZE the image (e.g., describe it, identify objects, ask questions about what's in it)?
-    Respond with a single word: either "EDIT" or "ANALYZE".
+def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_key='default'):
     """
-    try:
-        response = call_llm(
-            intent_prompt,
-            api_key=api_key,
-            model_config=model_config,
-            stream=False
-        )
-        intent = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip().upper()
-        if "EDIT" in intent:
-            return "EDIT"
-        return "ANALYZE"
-    except Exception as e:
-        print(f"Image intent classification failed: {e}. Defaulting to ANALYZE.")
-        return "ANALYZE"
+    Uses an LLM to analyze the user's query and route it to the appropriate pipeline.
+    Replaces all previous keyword-based logic.
+    """
+    available_tools = [
+        {"name": "conversational", "description": "Use for simple chat, greetings, acknowledgements, or when no other tool is appropriate."},
+        {"name": "general_research", "description": "Answers a general question by searching the web and synthesizing the results. Use for most 'who/what/where/when/why' questions."},
+        {"name": "coding", "description": "Handles requests for writing, debugging, or explaining code. Specify if the user wants a visual HTML output (e.g., a webpage, an animation) or just text/markdown code.", "parameters": [{"name": "visual_output_required", "type": "boolean", "description": "Set to true if the user's query implies a visual HTML output like a webpage, CSS design, or JavaScript animation."}]},
+        {"name": "image_generation", "description": "Generates a new image from a text description. Use when the user explicitly asks to 'create', 'draw', or 'generate' an image."},
+        {"name": "image_search", "description": "Finds existing images from the web. Use when the user asks for 'pictures of', 'images of', etc."},
+        {"name": "video_search", "description": "Finds videos from YouTube."},
+        {"name": "image_analysis", "description": "Analyzes a user-provided image to answer questions about it. This is the default tool when an image is uploaded and the query is a question about it."},
+        {"name": "image_editing", "description": "Edits a user-provided image based on instructions. Use when an image is provided and the user asks to 'add', 'remove', 'change style', etc."},
+        {"name": "file_analysis", "description": "Reads and analyzes the content of an uploaded file (PDF, TXT, etc.) to answer questions. This is the only tool to use when a file is uploaded."},
+        {"name": "youtube_video_analysis", "description": "Analyzes the transcript of a YouTube video URL to answer questions."},
+        {"name": "url_deep_parse", "description": "Scrapes and analyzes the content of a generic web URL."},
+        {"name": "deep_research", "description": "Conducts in-depth research on a topic by analyzing multiple sources and generating a detailed HTML report. Use for queries like 'comprehensive report on...'."},
+        {"name": "stock_query", "description": "Retrieves live stock data and generates an interactive chart for a specific stock ticker."},
+        {"name": "visualization_request", "description": "Generates an interactive HTML5 canvas visualization for data, math, or physics concepts."},
+        {"name": "academic_pipeline", "description": "Use when the 'academic' persona is active. Provides structured, sourced answers for academic queries."},
+    ]
 
-def profile_query(query, is_god_mode_active, image_data, file_data, persona_key='default'):
-    if image_data:
-        print("Determining user intent for image...")
-        user_intent = _get_image_intent(query, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL)
-        print(f"[Image Intent] Model classified query '{query}' as: {user_intent}")
-        if user_intent == "EDIT":
-            return "image_editing"
-        else:
-            return "image_analysis"
-            
+    # Handle preconditions that don't require an LLM for efficiency
     if file_data:
-        return "file_analysis"
-
-    q_lower = query.lower().strip()
-    q_stripped = query.strip()
-
+        return {"pipeline": "file_analysis", "params": {}}
     if persona_key == 'academic':
-        return "academic_pipeline"
-
-    if is_god_mode_active:
-        return "god_mode_reasoning"
-
-    if q_lower in ["hi", "hello", "hey", "thanks", "thank you", "ok", "bye", "yo", "sup", "what", "why", "how", "when", "who"]:
-        return "conversational"
-
-    stock_keywords = ['stock', 'market price', 'chart for', 'shares of', 'ticker', 'price of']
-    ticker_pattern = r'\b[A-Z]{2,5}\b'
-    potential_ticker = re.search(ticker_pattern, q_stripped)
-    has_stock_keyword = any(k in q_lower for k in stock_keywords)
-    if (potential_ticker and has_stock_keyword) or (has_stock_keyword and len(q_lower.split()) < 10):
-        return "stock_query"
-
-    deep_research_keywords = ["deep research on", "research paper about", "comprehensive report on", "do a full analysis of"]
-    if any(q_lower.startswith(k) for k in deep_research_keywords):
-        return "deep_research"
-
+        return {"pipeline": "academic_pipeline", "params": {}}
+    
     url_pattern = r'https?:\/\/[^\s]+'
-    url_match = re.search(url_pattern, q_stripped)
+    url_match = re.search(url_pattern, query.strip())
     if url_match:
         if "youtube.com" in url_match.group(0) or "youtu.be" in url_match.group(0):
-            return "youtube_video_analysis"
+            return {"pipeline": "youtube_video_analysis", "params": {}}
         else:
-            return "url_deep_parse"
+            return {"pipeline": "url_deep_parse", "params": {}}
 
-    if _is_image_generation_request(q_lower): return "image_generation_request"
-    if _is_image_search_request(q_lower): return "image_search_request"
-    if _is_video_search_request(q_lower): return "video_search_request"
+    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-6:]])
 
-    coding_keywords = ['code', 'script', 'function', 'class', 'algorithm', 'debug', 'how to program', 'write a program']
-    html_visual_keywords = ['html', 'css', 'webpage', 'website', 'ui for', 'design a', 'interactive page', 'lockscreen', 'homescreen', 'frontend', 'javascript animation', 'canvas script', 'svg animation', 'webgl', 'three.js', 'shader', 'p5.js']
-    if any(k in q_lower for k in coding_keywords) or any(k in q_lower for k in html_visual_keywords): return "coding"
-    if any(k in q_lower for k in ['preview this html:', 'render this code as html:', 'make an html element for']): return "html_preview"
-    if _is_explicit_visualization_request(q_lower): return "visualization_request"
+    routing_prompt = f"""
+You are an expert routing agent. Your task is to analyze the user's query and the conversation context, then select the single most appropriate tool from the provided list to handle the request. You must also determine the parameters for the chosen tool.
 
-    return "general_research"
+**Available Tools:**
+{json.dumps(available_tools, indent=2)}
+
+**Context:**
+- User has uploaded an image: {'Yes' if image_data else 'No'}
+- Current Persona: {persona_key}
+- Conversation History:
+{history_str}
+
+**Current User Query:** "{query}"
+
+**Instructions:**
+1.  Analyze the user's query and context.
+2.  Choose exactly one tool from the list.
+3.  Determine the values for any parameters the chosen tool requires.
+4.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the name of the chosen tool) and "params" (an object containing the required parameters).
+5.  If no specific parameters are needed, "params" should be an empty object {{}}.
+
+**JSON Output:**
+"""
+    
+    try:
+        response = call_llm(routing_prompt, UTILITY_API_KEY, UTILITY_MODEL, stream=False)
+        response_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            route_decision = json.loads(json_match.group(0))
+            if "pipeline" in route_decision and "params" in route_decision:
+                print(f"[LLM Router] Decision: {route_decision}")
+                return route_decision
+        
+        print(f"LLM Router failed to produce valid JSON. Response: {response_text}")
+        return {"pipeline": "general_research", "params": {}}
+
+    except Exception as e:
+        print(f"Error during LLM routing: {e}. Falling back to general research.")
+        return {"pipeline": "general_research", "params": {}}
 
 def get_stock_data(ticker, time_range='1mo'):
     """

@@ -5,6 +5,7 @@ import io
 import mimetypes
 import time
 import random
+import traceback
 
 from flask import request, Response, stream_with_context, send_from_directory, render_template, jsonify, session, url_for, redirect
 from flask_cors import CORS
@@ -12,7 +13,7 @@ from tinydb import Query
 
 from config import app, DATABASE, CONVERSATIONAL_MODEL, REASONING_MODEL, VISUALIZATION_MODEL, CONVERSATIONAL_API_KEY, REASONING_API_KEY, VISUALIZATION_API_KEY, UTILITY_API_KEY, UTILITY_MODEL, EDGE_TTS_VOICE_MAPPING, CATEGORIES, ARTICLE_LIST_CACHE_DURATION, CACHE, oauth, USER_DB
 from tools import (
-    get_persona_prompt_name, profile_query, get_trending_news_topics,
+    get_persona_prompt_name, route_query_to_pipeline, get_trending_news_topics,
     parse_with_bs4, get_article_content_tiered,
     setup_selenium_driver, call_llm
 )
@@ -32,12 +33,13 @@ from god_mode import run_god_mode_reasoning
 from default import run_default_pipeline
 from unhinged import run_unhinged_pipeline
 from custom import run_custom_pipeline
+from memory_system import MetaMemoryManager # New Import
 
 # Apply CORS to the app object from config
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # ==============================================================================
-# AI UTILITY FUNCTIONS
+# AI UTILITY FUNCTIONS (REFACTORED)
 # ==============================================================================
 def generate_chat_title(query, final_answer_content):
     prompt = f"""
@@ -56,50 +58,6 @@ def generate_chat_title(query, final_answer_content):
     except Exception as e:
         print(f"Error generating chat title: {e}")
         return "New Chat"
-
-def get_user_preferences(user_id):
-    User = Query()
-    result = USER_DB.search(User.user_id == user_id)
-    return result[0].get('preferences', []) if result else []
-
-def extract_and_save_user_preferences(user_id, full_turn_history):
-    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in full_turn_history])
-    prompt = f"""
-    Analyze the following conversation turn. Your goal is to identify and extract one key user preference that could be useful for personalizing future interactions.
-    A preference is a long-term trait, not a one-time request.
-    
-    Examples of good preferences to extract:
-    - "User prefers Python for coding examples."
-    - "User is a beginner in programming."
-    - "User is interested in space exploration and astrophysics."
-    - "User likes responses to be structured with bullet points."
-    
-    Examples of bad things to extract (one-time requests):
-    - "User asked for a picture of a cat."
-    - "User wants to know the weather."
-
-    Based on the conversation, identify ONE key preference. If a clear, long-term preference is stated or strongly implied, describe it in a short, simple sentence. If no clear preference is found, output the word "None".
-
-    Conversation:
-    {history_str}
-
-    Identified Preference:
-    """
-    try:
-        response = call_llm(prompt, UTILITY_API_KEY, UTILITY_MODEL, stream=False)
-        preference = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-        if preference.lower() != 'none' and preference != '':
-            User = Query()
-            existing_prefs = get_user_preferences(user_id)
-            if preference not in existing_prefs:
-                existing_prefs.append(preference)
-                USER_DB.upsert({'user_id': user_id, 'preferences': existing_prefs}, User.user_id == user_id)
-                print(f"Saved new preference for user {user_id}: {preference}")
-                return preference
-    except Exception as e:
-        print(f"Error extracting/saving user preferences: {e}")
-    return None
 
 # ==============================================================================
 # STREAMING EDGE-TTS API ENDPOINT
@@ -145,7 +103,7 @@ def text_to_speech():
     return Response(stream_with_context(generate_audio_stream()), mimetype="audio/mpeg")
 
 # ==============================================================================
-# CORE APPLICATION LOGIC
+# CORE APPLICATION LOGIC (HEAVILY REFACTORED)
 # ==============================================================================
 @app.after_request
 def add_security_headers(response):
@@ -154,13 +112,13 @@ def add_security_headers(response):
     return response
 
 @app.route('/search', methods=['POST'])
-def search():
+def search(): # This is now a REGULAR function, not a generator
+    # --- All setup code runs immediately within the request context ---
     data = request.json
     user_query = data.get('query')
     persona_key = data.get('persona', 'default')
     custom_persona_text = data.get('custom_persona_prompt', '')
     is_god_mode = data.get('is_god_mode', False)
-    chat_history = data.get('history', [])
     image_data = data.get('image_data')
     file_data = data.get('file_data')
     file_name = data.get('file_name')
@@ -168,109 +126,146 @@ def search():
 
     if not user_query and not image_data and not file_data:
         return Response(json.dumps({'error': 'No query, image, or file provided.'}), status=400, mimetype='application/json')
-    if not user_query: 
+    if not user_query:
         if image_data: user_query = "Describe this image."
         elif file_data: user_query = f"Summarize this file: {file_name}"
 
     user = session.get('user')
-    user_preferences = get_user_preferences(user['id']) if user else []
+    user_id = user['id'] if user else 0
+
+    memory_manager = MetaMemoryManager(user_id)
+    chat_history = memory_manager.episodic.get_chat_history(chat_id)
+    llm_context = memory_manager.retrieve_context_for_llm(user_query, chat_history)
 
     active_persona_name = get_persona_prompt_name(persona_key, custom_persona_text)
     if is_god_mode and persona_key != 'god':
         active_persona_name = get_persona_prompt_name('god', '')
 
-    query_profile_type = profile_query(user_query, is_god_mode, image_data, file_data, persona_key=persona_key)
-    
-    print(f"Query: '{user_query}', Profiled as: {query_profile_type}, GodMode: {is_god_mode}")
-
-    current_model_config = CONVERSATIONAL_MODEL
-    current_api_key = CONVERSATIONAL_API_KEY
-    
-    if query_profile_type in ["deep_research", "coding"]:
-        current_model_config = REASONING_MODEL
-        current_api_key = REASONING_API_KEY
-    elif query_profile_type in ["visualization_request", "html_preview", "stock_query"]:
-        current_model_config = VISUALIZATION_MODEL
-        current_api_key = VISUALIZATION_API_KEY
-
-    print(f"Using model: {current_model_config} for initial routing. Specific models may be used within pipelines.")
-
-    if not current_api_key:
-        error_msg = f"GEMINI_API_KEY not configured. This is required for all operations."
+    if not CONVERSATIONAL_API_KEY:
+        error_msg = "GEMINI_API_KEY not configured. This is required for all operations."
         def error_stream():
             yield yield_data('step', {'status': 'error', 'text': error_msg})
             yield yield_data('error', {'message': error_msg})
         return Response(stream_with_context(error_stream()), mimetype='text/event-stream')
 
-    pipelines = {
-        "conversational": run_pure_chat,
-        "visualization_request": run_visualization_pipeline,
-        "academic_pipeline": run_academic_pipeline,
-        "html_preview": run_html_pipeline,
-        "coding": run_coding_pipeline,
-        "general_research": run_standard_research,
-        "god_mode_reasoning": run_god_mode_reasoning,
-        "image_generation_request": run_image_generation_pipeline,
-        "image_search_request": run_image_search_pipeline,
-        "video_search_request": run_video_search_pipeline,
-        "youtube_video_analysis": run_youtube_video_pipeline,
-        "url_deep_parse": run_url_deep_parse_pipeline,
-        "deep_research": run_deep_research_pipeline,
-        "image_analysis": run_image_analysis_pipeline,
-        "image_editing": run_image_editing_pipeline,
-        "file_analysis": run_file_analysis_pipeline,
-        "stock_query": run_stock_pipeline,
-        "default": run_default_pipeline,
-        "unhinged": run_unhinged_pipeline,
-        "custom": run_custom_pipeline,
-    }
-    pipeline_func = pipelines.get(query_profile_type, run_default_pipeline)
+    # --- Define the generator that will be streamed ---
+    def streaming_logic():
+        # This first yield is now safely inside the generator passed to the Response
+        yield yield_data('step', {'status': 'routing', 'text': 'Analyzing query intent...'})
 
-    main_generator = pipeline_func(
-        user_query, active_persona_name, current_api_key, current_model_config,
-        chat_history, is_god_mode, query_profile_type, custom_persona_text,
-        persona_key, image_data=image_data, file_data=file_data, file_name=file_name,
-        user_preferences=user_preferences
-    )
+        route_decision = route_query_to_pipeline(user_query, chat_history, image_data, file_data, persona_key)
+        query_profile_type = route_decision.get("pipeline", "general_research")
+        pipeline_params = route_decision.get("params", {})
 
-    def response_wrapper(generator):
-        final_data_packet = None
-        for chunk in generator:
-            if chunk.startswith('data: '):
-                try:
-                    data = json.loads(chunk[6:])
-                    if data.get('type') == 'final_response':
-                        final_data_packet = data['data']
-                        continue
-                except json.JSONDecodeError:
-                    pass
-            yield chunk
-        
-        if final_data_packet and chat_id and user:
-            user_id = user['id']
-            save_chat_message(user_id, chat_id, user_query, final_data_packet)
-            
-            conn = get_db_connection()
-            message_count = conn.execute('SELECT COUNT(id) FROM memory WHERE chat_id = ?', (chat_id,)).fetchone()[0]
-            conn.close()
+        print(f"Query: '{user_query}', Profiled as: {query_profile_type}, GodMode: {is_god_mode}, Params: {pipeline_params}")
 
-            if message_count == 1:
-                title = generate_chat_title(user_query, final_data_packet.get('content', ''))
-                if title:
-                    conn = get_db_connection()
-                    conn.execute('UPDATE chats SET title = ? WHERE id = ? AND user_id = ?', (title, chat_id, user_id))
-                    conn.commit()
-                    conn.close()
-                    yield yield_data('chat_title_generated', {'chat_id': chat_id, 'title': title})
+        current_model_config = CONVERSATIONAL_MODEL
+        current_api_key = CONVERSATIONAL_API_KEY
 
-            full_history_for_pref = chat_history + [{'role': 'user', 'content': user_query}, {'role': 'assistant', 'content': final_data_packet.get('content', '')}]
-            saved_pref_text = extract_and_save_user_preferences(user_id, full_history_for_pref)
-            if saved_pref_text:
-                yield yield_data('preference_saved', {'preference': saved_pref_text})
+        if query_profile_type in ["deep_research", "coding"]:
+            current_model_config = REASONING_MODEL
+            current_api_key = REASONING_API_KEY
+        elif query_profile_type in ["visualization_request", "html_preview", "stock_query"]:
+            current_model_config = VISUALIZATION_MODEL
+            current_api_key = VISUALIZATION_API_KEY
+
+        print(f"Using model: {current_model_config} for initial routing. Specific models may be used within pipelines.")
+
+        pipelines = {
+            "conversational": run_pure_chat,
+            "visualization_request": run_visualization_pipeline,
+            "academic_pipeline": run_academic_pipeline,
+            "html_preview": run_html_pipeline,
+            "coding": run_coding_pipeline,
+            "general_research": run_standard_research,
+            "god_mode_reasoning": run_god_mode_reasoning,
+            "image_generation": run_image_generation_pipeline,
+            "image_search": run_image_search_pipeline,
+            "video_search": run_video_search_pipeline,
+            "youtube_video_analysis": run_youtube_video_pipeline,
+            "url_deep_parse": run_url_deep_parse_pipeline,
+            "deep_research": run_deep_research_pipeline,
+            "image_analysis": run_image_analysis_pipeline,
+            "image_editing": run_image_editing_pipeline,
+            "file_analysis": run_file_analysis_pipeline,
+            "stock_query": run_stock_pipeline,
+            "default": run_default_pipeline,
+            "unhinged": run_unhinged_pipeline,
+            "custom": run_custom_pipeline,
+        }
+        pipeline_func = pipelines.get(query_profile_type, run_default_pipeline)
+
+        pipeline_kwargs = {
+            "image_data": image_data, "file_data": file_data, "file_name": file_name,
+            "llm_context": llm_context, **pipeline_params
+        }
+
+        # FIX 1: Handle query parameter conflict from router
+        # If the router provides a 'query', it overrides the original user_query.
+        # Then we remove it from kwargs to avoid the TypeError.
+        final_query = pipeline_kwargs.pop('query', user_query)
+
+        main_generator = pipeline_func(
+            final_query, active_persona_name, current_api_key, current_model_config,
+            chat_history, is_god_mode, query_profile_type, custom_persona_text,
+            persona_key, **pipeline_kwargs
+        )
+
+        # FIX 2: Add robust error handling for the entire stream
+        try:
+            for chunk in main_generator:
+                if chunk.startswith('data: '):
+                    try:
+                        chunk_data = json.loads(chunk[6:])
+                        # FIX 3: Correctly process final_response without stopping the yield
+                        if chunk_data.get('type') == 'final_response':
+                            final_data_packet = chunk_data.get('data')
+
+                            if final_data_packet and chat_id and user:
+                                saved_mems = memory_manager.analyze_and_save_turn(user_query, final_data_packet, chat_id)
+                                if saved_mems:
+                                    saved_core = [mem for mem in saved_mems if mem.startswith("core:")]
+                                    if saved_core:
+                                        yield yield_data('preference_saved', {'preference': saved_core[0].split("=")[1]})
+
+                                conn = get_db_connection()
+                                message_count = conn.execute('SELECT COUNT(id) FROM episodic_memory WHERE chat_id = ? AND user_id = ?', (chat_id, user_id)).fetchone()[0]
+                                conn.close()
+
+                                if message_count == 2: # A turn is 2 messages (user+assistant)
+                                    title = generate_chat_title(user_query, final_data_packet.get('content', ''))
+                                    if title:
+                                        conn = get_db_connection()
+                                        conn.execute('UPDATE chats SET title = ? WHERE id = ? AND user_id = ?', (title, chat_id, user_id))
+                                        conn.commit()
+                                        conn.close()
+                                        yield yield_data('chat_title_generated', {'chat_id': chat_id, 'title': title})
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+                yield chunk
+        except requests.exceptions.HTTPError as e:
+            print(f"Caught HTTPError during stream: {e}")
+            error_message = f"The AI model is currently unavailable or overloaded (Error {e.response.status_code}). Please try again in a few moments."
+            try:
+                error_details = e.response.json().get("error", {}).get("message", "No details provided.")
+                error_message = f"The AI model reported an error (Code: {e.response.status_code}): {error_details}. Please try again later."
+            except (json.JSONDecodeError, AttributeError):
+                pass
+            yield yield_data('step', {'status': 'error', 'text': error_message})
+            yield yield_data('error', {'message': error_message})
+        except Exception as e:
+            print(f"Caught generic exception during stream: {e}")
+            traceback.print_exc()
+            error_message = f"An unexpected error occurred while generating the response. Please check the server logs."
+            yield yield_data('step', {'status': 'error', 'text': 'An unexpected error occurred.'})
+            yield yield_data('error', {'message': error_message})
+
 
         yield 'data: [DONE]\n\n'
 
-    return Response(stream_with_context(response_wrapper(main_generator)), mimetype='text/event-stream')
+    # The search function returns the Response object with the generator
+    return Response(stream_with_context(streaming_logic()), mimetype='text/event-stream')
+
 
 # ==============================================================================
 # FLASK ROUTING AND SERVER STARTUP
@@ -559,20 +554,6 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-def save_chat_message(user_id, chat_id, query, answer_data_json):
-    """Saves a user query and its corresponding bot answer to the memory table."""
-    try:
-        conn = get_db_connection()
-        conn.execute(
-            'INSERT INTO memory (user_id, chat_id, query, answer_data) VALUES (?, ?, ?, ?)',
-            (user_id, chat_id, query, json.dumps(answer_data_json))
-        )
-        conn.commit()
-        conn.close()
-        print(f"Successfully saved message for chat_id: {chat_id}")
-    except Exception as e:
-        print(f"Error saving chat message for chat_id {chat_id}: {e}")
-
 @app.route('/api/chats', methods=['GET'])
 def get_chats():
     user = session.get('user')
@@ -625,9 +606,11 @@ def delete_chat(chat_id):
         return jsonify({"error": "Unauthorized"}), 401
 
     conn = get_db_connection()
-    # Use a transaction
     try:
-        conn.execute('DELETE FROM memory WHERE chat_id = ? AND user_id = ?', (chat_id, user['id']))
+        # Cascade delete from all memory tables
+        conn.execute('DELETE FROM episodic_memory WHERE chat_id = ? AND user_id = ?', (chat_id, user['id']))
+        conn.execute('DELETE FROM resource_memory WHERE chat_id = ? AND user_id = ?', (chat_id, user['id']))
+        # Finally, delete the chat itself
         conn.execute('DELETE FROM chats WHERE id = ? AND user_id = ?', (chat_id, user['id']))
         conn.commit()
     except Exception as e:
@@ -652,31 +635,35 @@ def get_chat_history(chat_id):
         conn.close()
         return jsonify({"error": "Chat not found or access denied"}), 404
 
-    history = conn.execute('SELECT query, answer_data FROM memory WHERE chat_id = ? ORDER BY timestamp ASC', (chat_id,)).fetchall()
+    # Use the new Episodic Memory to get history
+    memory_manager = MetaMemoryManager(user['id'])
+    history_records = memory_manager.episodic.get_raw_history(chat_id)
     conn.close()
     
     formatted_history = []
-    for record in history:
-        formatted_history.append({
-            'role': 'user',
-            'content': record['query']
-        })
-        try:
-            answer_json = json.loads(record['answer_data'])
+    for record in history_records:
+        if record['role'] == 'user':
             formatted_history.append({
-                'role': 'assistant',
-                'content': answer_json.get('content', ''),
-                'artifacts': answer_json.get('artifacts', []),
-                'sources': answer_json.get('sources', []),
-                'suggestions': answer_json.get('suggestions', []),
-                'imageResults': answer_json.get('imageResults', []),
-                'videoResults': answer_json.get('videoResults', [])
+                'role': 'user',
+                'content': record['content']
             })
-        except (json.JSONDecodeError, TypeError):
-            formatted_history.append({
-                'role': 'assistant',
-                'content': 'Error: Could not decode message content.'
-            })
+        elif record['role'] == 'assistant' and record['final_data_json']:
+             try:
+                answer_json = json.loads(record['final_data_json'])
+                formatted_history.append({
+                    'role': 'assistant',
+                    'content': answer_json.get('content', ''),
+                    'artifacts': answer_json.get('artifacts', []),
+                    'sources': answer_json.get('sources', []),
+                    'suggestions': answer_json.get('suggestions', []),
+                    'imageResults': answer_json.get('imageResults', []),
+                    'videoResults': answer_json.get('videoResults', [])
+                })
+             except (json.JSONDecodeError, TypeError):
+                formatted_history.append({
+                    'role': 'assistant',
+                    'content': 'Error: Could not decode message content.'
+                })
             
     return jsonify(formatted_history)
 
@@ -684,27 +671,38 @@ def init_db():
     import sqlite3
     if not os.path.exists(DATABASE):
         print("Database not found. Initializing...")
-        try:
-            conn = sqlite3.connect(DATABASE)
+    else:
+        print("Database found. Checking schema...")
+        
+    try:
+        conn = sqlite3.connect(DATABASE)
+        # Check if a new table exists. If not, assume schema needs to be run.
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='episodic_memory';")
+        if cursor.fetchone() is None:
+            print("Old schema detected or new database. Initializing from schema.sql...")
             with open('schema.sql', 'r') as f:
                 conn.executescript(f.read())
             conn.commit()
-            conn.close()
-            print("✅ Database initialized successfully from schema.sql.")
-        except Exception as e:
-            print(f"❌ DB initialization error: {e}")
+            print("✅ Database initialized/updated successfully from schema.sql.")
+        else:
+            print("✅ Database schema appears up-to-date.")
+        conn.close()
+    except Exception as e:
+        print(f"❌ DB initialization error: {e}")
+
 
 if __name__ == '__main__':
     import sqlite3
     from tools import get_current_datetime_str
     init_db()
 
-    print(f"🚀 SKYTH ENGINE v9.2 (Personalized Multi-Chat) - Running with current date: {get_current_datetime_str()}")
+    print(f"🚀 SKYTH ENGINE v10.2 (Agentic Memory Architecture) - Running with current date: {get_current_datetime_str()}")
     print(f"   Conversational Model: {CONVERSATIONAL_MODEL}")
     print(f"   Reasoning Model: {REASONING_MODEL} (Reserved for Coding & Deep Research)")
     print(f"   Visualization Model: {VISUALIZATION_MODEL}")
-    print(f"   Utility Model: {UTILITY_MODEL} (For Titles & Preferences)")
+    print(f"   Utility/Routing Model: {UTILITY_MODEL}")
     print(f"   Image Generation/Editing Model: {os.getenv('IMAGE_GENERATION_MODEL', 'gemini-2.0-flash-preview-image-generation')}")
-    print("   Features: Multi-chat support, AI-generated titles, cross-chat memory & preference saving, chat management (rename/delete).")
+    print("   Features: Agentic multi-component memory, LLM-based query routing, no keyword logic.")
     print("🌐 Server running on http://127.0.0.1:5000")
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))

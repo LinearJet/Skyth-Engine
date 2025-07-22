@@ -4,27 +4,24 @@ from config import VISUALIZATION_API_KEY, VISUALIZATION_MODEL, REASONING_API_KEY
 from tools import call_llm, _create_error_html_page
 from utils import yield_data, _stream_llm_response
 
-def run_coding_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+def run_coding_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, visual_output_required=False, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': f'Engaging model for coding task: "{query[:50]}..."'})
 
-    q_lower = query.lower()
-    html_keywords = ['html', 'css', 'webpage', 'website', 'ui for', 'design a', 'interactive page', 'lockscreen', 'homescreen', 'frontend', 'javascript animation', 'canvas script', 'svg animation', 'p5.js']
-    is_visual_html_request = any(k in q_lower for k in html_keywords) or \
-                             ("javascript" in q_lower and any(vk in q_lower for vk in ["animation", "interactive", "visual", "game", "canvas", "svg"])) or \
-                             ("html" in q_lower and any(ck in q_lower for ck in ["page", "form", "layout", "template", "component"]))
+    # The decision is now made by the router and passed as a parameter.
+    is_visual_html_request = visual_output_required
 
     coding_prompt = f"""
 This is part of an ongoing conversation. User's current coding query: "{query}"
 You are an expert software engineer. Your task is to respond to the user's coding query.
 Rely solely on your internal knowledge.
 Output Requirements:
-1.  If the user's query clearly implies a **visual HTML output** (e.g., creating an HTML page, a CSS design, a JavaScript animation, an interactive UI element):
+1.  If the request is for a **visual HTML output** (as determined by the routing agent):
     *   You **MUST** generate a *complete, self-contained HTML document* (starting with <!DOCTYPE html>).
     *   This HTML must be renderable in an iframe. All JavaScript and CSS must be embedded.
     *   If external libraries are essential (like p5.js for a canvas animation), use CDN links.
     *   The output in this case **MUST BE ONLY THE HTML CODE**. No explanations before or after, no markdown backticks around the HTML.
-2.  If the user's query is for **non-visual code** (e.g., a Python function, a C++ algorithm, explaining a concept, debugging code not meant for a browser):
+2.  If the request is for **non-visual code** (as determined by the routing agent):
     *   Provide the code in standard markdown code blocks (e.g., ```python ... ```).
     *   Include a clear explanation of the code and concepts.
     *   This output will be streamed as text.

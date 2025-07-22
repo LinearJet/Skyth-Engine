@@ -15,13 +15,11 @@
 
     <!-- MathJax for Math Rendering -->
     <script>
-        // <!-- FIX: Switched from SVG to CHTML output for more robust rendering -->
         MathJax = {
           tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
           chtml: { fontfamily: 'TeX' }
         };
     </script>
-    <!-- FIX: Changed script from tex-svg.js to tex-chtml.js -->
     <script type="text/javascript" id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
 
     <style>
@@ -51,7 +49,8 @@
         #prompt-input, #artifact-code-block, input, textarea, code.hljs {
             user-select: text;
         }
-        .chat-message.text-selectable {
+        /* FIX: Apply user-select to all children of the selectable message */
+        .chat-message.text-selectable, .chat-message.text-selectable * {
             user-select: text;
         }
 
@@ -102,6 +101,7 @@
         #convo-history { list-style: none; }
         #convo-history li a { display: block; padding: 10px; color: var(--primary-text-color); text-decoration: none; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         #convo-history li a:hover { background-color: var(--button-bg); }
+        #convo-history li a.active { background-color: var(--button-bg); font-weight: 600; }
         
         .sidebar-footer { margin-top: auto; padding-top: 15px; border-top: 1px solid var(--border-color); box-shadow: 0 -10px 15px -10px rgba(0,0,0,0.4); display: flex; justify-content: space-between; align-items: center; }
         #profile-link { display: flex; align-items: center; gap: 10px; padding: 10px; color: var(--secondary-text-color); text-decoration: none; border-radius: 6px; font-weight: 500; flex-grow: 1; }
@@ -141,7 +141,6 @@
         .bot-message { align-self: stretch; max-width: 100%; padding: 10px 0; }
         .bot-message-content { 
             display: flex; flex-direction: column; gap: 10px;
-            /* FIX: Prevents flex items from overflowing their container, fixing the mobile layout bug */
             min-width: 0; 
         }
         .bot-message-content p:last-child { margin-bottom: 0; }
@@ -187,8 +186,9 @@
             overflow: hidden;
         }
         .artifact-thumbnail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-        .artifact-thumbnail-header span { font-weight: bold; font-size: 14px; }
-        .artifact-thumbnail-header i { color: var(--secondary-text-color); }
+        /* FIX: Prevent long artifact titles from breaking the UI */
+        .artifact-thumbnail-header span { font-weight: bold; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .artifact-thumbnail-header i { color: var(--secondary-text-color); flex-shrink: 0; margin-left: 8px; }
         .artifact-thumbnail-code { font-family: 'Courier New', Courier, monospace; font-size: 10px; color: #9e9e9e; white-space: pre; overflow: hidden; text-overflow: ellipsis; max-height: 40px; line-height: 1.4; }
         
         #artifact-viewer { position: fixed; top: 0; right: 0; width: 45%; height: 100%; background-color: rgba(20, 20, 20, 0.8); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border-left: 1px solid var(--border-color); z-index: 2000; transform: translateX(100%); transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94); display: flex; flex-direction: column; }
@@ -228,13 +228,13 @@
         #attachment-preview-name { font-size: 14px; color: var(--primary-text-color); }
         #remove-attachment-btn { position: absolute; top: -8px; right: -8px; background-color: #f44336; color: white; width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; }
 
-        #context-menu {
+        #context-menu, #sidebar-context-menu {
             position: fixed; z-index: 3000; background-color: #2c2c32; border-radius: 12px;
             box-shadow: 0 5px 25px rgba(0,0,0,0.3); padding: 8px; display: flex;
             flex-direction: column; gap: 5px; opacity: 0; pointer-events: none;
             transform: scale(0.95); transition: opacity 0.15s ease-out, transform 0.15s ease-out;
         }
-        #context-menu.visible { opacity: 1; pointer-events: auto; transform: scale(1); }
+        #context-menu.visible, #sidebar-context-menu.visible { opacity: 1; pointer-events: auto; transform: scale(1); }
         .context-menu-item { display: flex; align-items: center; gap: 10px; padding: 10px 15px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
         .context-menu-item:hover { background-color: var(--button-bg); }
         .context-menu-item i { width: 15px; text-align: center; }
@@ -249,7 +249,7 @@
         #media-viewer-image, #media-viewer-video, #media-viewer-iframe { max-width: 90%; max-height: 90%; display: none; }
         #media-viewer-iframe { width: 80vw; height: 80vh; border: none; }
         
-        .thinking-animator {
+        .thinking-animator, .chat-area-loader {
             align-self: flex-start;
             padding: 8px 15px;
             background-color: var(--surface-color);
@@ -258,10 +258,14 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-left: 5px; /* Align with bot messages */
+            margin-left: 5px;
             margin-top: 5px;
         }
-        .thinking-animator i {
+        .chat-area-loader {
+            align-self: center;
+            margin: auto;
+        }
+        .thinking-animator i, .chat-area-loader i {
             animation: spin 1.5s linear infinite;
         }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -372,6 +376,11 @@
         <div class="context-menu-item" id="context-video-search"><i class="fa-solid fa-video"></i> Search videos of...</div>
     </div>
 
+    <div id="sidebar-context-menu" class="context-menu">
+        <div class="context-menu-item" id="context-rename"><i class="fa-solid fa-pen"></i> Rename</div>
+        <div class="context-menu-item" id="context-delete"><i class="fa-regular fa-trash-can"></i> Delete</div>
+    </div>
+
     <div id="media-viewer">
         <i id="media-viewer-close" class="fa-solid fa-xmark"></i>
         <img id="media-viewer-image" src="">
@@ -386,16 +395,17 @@ document.addEventListener('DOMContentLoaded', () => {
         model: 'gemini/gemini-2.5-flash-lite-preview-06-17',
         currentPersona: 'default',
         deepSearchMode: 'none',
-        isIncognito: false, // Incognito is now managed by not having a chat_id
+        isIncognito: false,
         isChatActive: false,
         attachedImageData: null,
         attachedFileData: null,
         attachedFileName: null,
-        currentChatId: null // This is the key for multi-chat
+        currentChatId: null
     };
     let currentArtifact = { code: null, type: null, title: null };
-    let chatHistory = []; // This will now hold the history for the CURRENT chat only
+    let chatHistory = [];
     let currentPlayingAudio = null;
+    let isRenaming = false;
 
     // --- DOM ELEMENTS ---
     const appContainer = document.getElementById('app-container');
@@ -425,27 +435,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const mediaViewerIframe = document.getElementById('media-viewer-iframe');
     const mediaViewerClose = document.getElementById('media-viewer-close');
     const incognitoToggle = document.getElementById('incognito-toggle');
-    let longPressTimer, contextTargetElement = null;
+    const sidebarSearch = document.getElementById('sidebar-search');
+    const sidebarContextMenu = document.getElementById('sidebar-context-menu');
+    let longPressTimer, contextTargetElement = null, sidebarContextTargetElement = null;
 
     // --- INITIALIZATION & CORE UI FLOW ---
     async function initializeChat() {
-        // We don't use sessionStorage anymore for history
-        const initialLogo = document.getElementById('initial-logo-view');
-        
-        // Check if a chat was loaded from the backend
         const urlParams = new URLSearchParams(window.location.search);
         const chatIdFromUrl = urlParams.get('chat_id');
 
         if (chatIdFromUrl) {
-            await loadChat(chatIdFromUrl);
+            showChatAreaLoader();
+            await loadChat(parseInt(chatIdFromUrl));
         } else {
-            // No chat loaded, show the initial view
-            if (initialLogo) initialLogo.style.display = 'block';
+            document.getElementById('initial-logo-view').style.display = 'block';
         }
         
-        // Always load the chat list for the sidebar
         await loadChatList();
-        
         animatePageIn();
     }
 
@@ -458,7 +464,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isSilent) {
                 initialLogoContainer.remove();
             } else {
-                // Thanos snap animation with reduced particle count
                 anime({
                     targets: '.logo-particle',
                     translateX: () => anime.random(80, 150),
@@ -467,7 +472,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     rotate: () => anime.random(-180, 180),
                     opacity: [anime.random(0.5, 0.8), 0],
                     duration: () => anime.random(1200, 1800),
-                    delay: anime.stagger(6, {grid: [10, 10], from: 'center'}), // Reduced from 15x15 to 10x10 grid
+                    delay: anime.stagger(6, {grid: [10, 10], from: 'center'}),
                     easing: 'easeOutExpo',
                     complete: () => {
                         if (initialLogoContainer) initialLogoContainer.remove();
@@ -488,14 +493,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function resetChat() {
-        // Instead of reloading, just clear the state and UI
         state.currentChatId = null;
         state.isChatActive = false;
         chatHistory = [];
         chatArea.innerHTML = '';
-        document.getElementById('initial-logo-view')?.remove(); // Ensure it's gone
+        document.getElementById('initial-logo-view')?.remove();
         
-        // Create the logo view again if it was removed
         if (!document.getElementById('initial-logo-view')) {
             const logoView = document.createElement('div');
             logoView.id = 'initial-logo-view';
@@ -503,7 +506,6 @@ document.addEventListener('DOMContentLoaded', () => {
             createLogoParticles();
         }
         
-        // Reset header icons
         incognitoToggle.style.display = 'inline-block';
         anime({ targets: incognitoToggle, opacity: 1, duration: 300, easing: 'easeInCubic' });
         const newChatIcon = document.getElementById('new-chat-header-btn');
@@ -511,10 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
             anime({ targets: newChatIcon, opacity: 0, duration: 300, easing: 'easeOutCubic', complete: () => newChatIcon.style.display = 'none' });
         }
 
-        // Clear the active state in the sidebar
         document.querySelectorAll('#convo-history li a.active').forEach(el => el.classList.remove('active'));
-        
-        // Update URL
         window.history.pushState({}, '', '/');
     }
     
@@ -526,7 +525,6 @@ document.addEventListener('DOMContentLoaded', () => {
     fileUploadInput.addEventListener('change', (e) => handleFileSelection(e.target.files[0], 'file'));
     multimodalToggle.addEventListener('click', e => { e.stopPropagation(); const menu = document.getElementById('multimodal-menu'); toggleMenu(menu); multimodalToggle.classList.toggle('active', menu.style.opacity === '1'); });
     
-    // Sidebar & Header
     document.getElementById('hamburger-menu').addEventListener('click', () => document.body.classList.add('sidebar-open'));
     document.getElementById('sidebar-collapse-btn').addEventListener('click', () => document.body.classList.remove('sidebar-open'));
     document.getElementById('sidebar-backdrop').addEventListener('click', () => document.body.classList.remove('sidebar-open'));
@@ -541,11 +539,16 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         pageTransition(e.currentTarget.href);
     });
-    // Handle bfcache (back/forward cache)
-    window.addEventListener('pageshow', (event) => {
-        if (event.persisted) {
-            initializeChat();
-        }
+    window.addEventListener('pageshow', (event) => { if (event.persisted) { initializeChat(); } });
+
+    sidebarSearch.addEventListener('input', () => {
+        const searchTerm = sidebarSearch.value.toLowerCase();
+        document.querySelectorAll('#convo-history li').forEach(item => {
+            const chatTitle = item.querySelector('a')?.textContent.toLowerCase();
+            if (chatTitle) {
+                item.style.display = chatTitle.includes(searchTerm) ? '' : 'none';
+            }
+        });
     });
 
     document.querySelectorAll('.collapsible-menu-container > button').forEach(button => {
@@ -555,26 +558,36 @@ document.addEventListener('DOMContentLoaded', () => {
     personaMenu.addEventListener('click', e => { const item = e.target.closest('.menu-item'); if (item) { state.currentPersona = item.dataset.persona; personaSelectorButton.classList.toggle('active', state.currentPersona !== 'default'); closeAllMenus(); } });
     document.getElementById('model-menu').addEventListener('click', e => { const item = e.target.closest('.menu-item'); if (item) { state.model = item.dataset.model; document.querySelector('#model-selector span').textContent = item.textContent; closeAllMenus(); } });
     document.getElementById('deep-search-menu').addEventListener('click', e => { const item = e.target.closest('.menu-item'); if (item) { state.deepSearchMode = item.dataset.searchMode; document.getElementById('deep-search-button').classList.toggle('active', state.deepSearchMode !== 'none'); closeAllMenus(); } });
+    
     document.addEventListener('click', (e) => { 
         closeAllMenus(); 
         if (!contextMenu.contains(e.target)) { hideContextMenu(); }
-        if (!e.target.closest('.chat-message')) {
-            document.querySelectorAll('.chat-message.text-selectable').forEach(el => el.classList.remove('text-selectable'));
+        if (!sidebarContextMenu.contains(e.target)) { hideSidebarContextMenu(); }
+        // FIX: Only deselect text if the click is outside the selected message
+        if (contextTargetElement && !contextTargetElement.contains(e.target) && !contextMenu.contains(e.target)) {
+            contextTargetElement.classList.remove('text-selectable');
+            contextTargetElement = null;
         }
     });
+
     artifactViewerCloseBtn.addEventListener('click', hideArtifact);
     artifactViewerCopyBtn.addEventListener('click', () => { if (currentArtifact.code) { navigator.clipboard.writeText(currentArtifact.code).then(() => { artifactViewerCopyBtn.className = 'fa-solid fa-check artifact-viewer-button'; setTimeout(() => { artifactViewerCopyBtn.className = 'fa-regular fa-copy artifact-viewer-button'; }, 1500); }); } });
     interactiveViewBtn.addEventListener('click', () => setArtifactViewMode('interactive'));
     codeViewBtn.addEventListener('click', () => setArtifactViewMode('code'));
     mediaViewerClose.addEventListener('click', hideMediaViewer);
 
-    // --- CONTEXT MENU ---
+    // --- CONTEXT MENUS ---
     function showContextMenu(e) {
         e.preventDefault();
-        document.querySelectorAll('.chat-message.text-selectable').forEach(el => el.classList.remove('text-selectable'));
+        hideSidebarContextMenu();
         
         const targetMessage = e.target.closest('.chat-message');
         if (!targetMessage) return;
+
+        // If another message was already selected for text, deselect it.
+        if (contextTargetElement && contextTargetElement !== targetMessage) {
+            contextTargetElement.classList.remove('text-selectable');
+        }
 
         contextTargetElement = targetMessage;
         contextMenu.style.left = `${e.clientX}px`; contextMenu.style.top = `${e.clientY}px`;
@@ -602,21 +615,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!state.isChatActive) startChatExperience();
         
-        // If this is the first message of a new chat, create it first
         if (!state.currentChatId) {
             try {
-                const newChat = await createNewChat(prompt.substring(0, 50)); // Use first 50 chars for title
+                const newChat = await createNewChat(prompt.substring(0, 50));
                 if (newChat && newChat.id) {
                     state.currentChatId = newChat.id;
-                    await loadChatList(); // Refresh sidebar with new chat
-                    window.history.pushState({}, '', `/?chat_id=${state.currentChatId}`); // Update URL
+                    await loadChatList();
+                    window.history.pushState({}, '', `/?chat_id=${state.currentChatId}`);
                 } else {
                     throw new Error("Failed to create a new chat on the backend.");
                 }
             } catch (error) {
                 console.error("Error creating new chat:", error);
-                const errorMsgData = { role: 'assistant', content: `Sorry, I couldn't start a new chat: <br><pre>${error.message}</pre>`, artifacts: [], sources: [], suggestions: [], imageResults: [], videoResults: [] };
-                renderCompleteBotMessage(errorMsgData);
+                renderCompleteBotMessage({ role: 'assistant', content: `Sorry, I couldn't start a new chat: <br><pre>${error.message}</pre>` });
                 return;
             }
         }
@@ -638,7 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
             image_data: state.attachedImageData,
             file_data: state.attachedFileData,
             file_name: state.attachedFileName,
-            chat_id: state.currentChatId // <-- SEND THE CHAT ID
+            chat_id: state.currentChatId
         };
         if (state.attachedFileData || state.attachedImageData) removeAttachmentPreview();
 
@@ -648,12 +659,11 @@ document.addEventListener('DOMContentLoaded', () => {
             await handleStreamResponse(response, animator);
         } catch (error) {
             animator.destroy();
-            const errorMsgData = { role: 'assistant', content: `Sorry, an error occurred: <br><pre>${error.message}</pre>`, artifacts: [], sources: [], suggestions: [], imageResults: [], videoResults: [] };
+            const errorMsgData = { role: 'assistant', content: `Sorry, an error occurred: <br><pre>${error.message}</pre>` };
             renderCompleteBotMessage(errorMsgData);
             chatHistory.push(errorMsgData);
         } finally {
             sendButton.disabled = promptInput.value.trim() === '' && !state.attachedImageData && !state.attachedFileData;
-            // No more sessionStorage
         }
     }
 
@@ -712,15 +722,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             case 'image_search_results': botMessageData.imageResults = json.data; break;
                             case 'video_search_results': botMessageData.videoResults = json.data; break;
-                            // This case is new, it's where the backend sends the full object to be saved
                             case 'final_response':
                                 const finalData = json.data;
-                                botMessageData.content = finalData.content || botMessageData.content;
-                                botMessageData.artifacts = finalData.artifacts || botMessageData.artifacts;
-                                botMessageData.sources = finalData.sources || botMessageData.sources;
-                                botMessageData.suggestions = finalData.suggestions || botMessageData.suggestions;
-                                botMessageData.imageResults = finalData.imageResults || botMessageData.imageResults;
-                                botMessageData.videoResults = finalData.videoResults || botMessageData.videoResults;
+                                Object.assign(botMessageData, finalData);
                                 break;
                         }
                         if (wasAtBottom) scrollToBottom();
@@ -744,7 +748,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderCompleteBotMessage(msg, false);
             }
         });
-        chatArea.scrollTop = chatArea.scrollHeight;
+        scrollToBottom(true);
     }
 
     function renderCompleteBotMessage(messageData, animate = true) {
@@ -765,7 +769,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function postProcessMessage(messageElement, textElement, messageData) {
-        // Handle syntax highlighting robustly
         textElement.querySelectorAll('pre code').forEach(block => {
             const lineCount = block.textContent.split('\n').length;
             const langMatch = block.className.match(/language-(\w+)/);
@@ -779,17 +782,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Handle MathJax rendering
         if (window.MathJax && MathJax.typesetPromise) {
             MathJax.typesetPromise([textElement]).catch(console.error);
         }
         
         const pillsContainer = document.createElement('div');
         pillsContainer.className = 'message-pills-container';
-        if (messageData.sources && messageData.sources.length > 0) pillsContainer.appendChild(createPill('sources', messageData.sources));
-        if (messageData.imageResults && messageData.imageResults.length > 0) pillsContainer.appendChild(createMediaPill('images', messageData.imageResults));
-        if (messageData.videoResults && messageData.videoResults.length > 0) pillsContainer.appendChild(createMediaPill('videos', messageData.videoResults));
-        if (messageData.suggestions && messageData.suggestions.length > 0) pillsContainer.appendChild(createPill('suggestions', messageData.suggestions));
+        if (messageData.sources?.length) pillsContainer.appendChild(createPill('sources', messageData.sources));
+        if (messageData.imageResults?.length) pillsContainer.appendChild(createMediaPill('images', messageData.imageResults));
+        if (messageData.videoResults?.length) pillsContainer.appendChild(createMediaPill('videos', messageData.videoResults));
+        if (messageData.suggestions?.length) pillsContainer.appendChild(createPill('suggestions', messageData.suggestions));
         if (pillsContainer.hasChildNodes()) messageElement.querySelector('.bot-message-content').appendChild(pillsContainer);
         
         messageElement.dataset.rawMarkdown = messageData.content;
@@ -1126,12 +1128,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function isUserAtBottom() { return chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight <= 100; }
     function scrollToBottom(force = false) {
         if (force || isUserAtBottom()) {
-            anime({
-                targets: chatArea,
-                scrollTop: chatArea.scrollHeight,
-                duration: 400,
-                easing: 'easeOutCubic'
-            });
+            anime({ targets: chatArea, scrollTop: chatArea.scrollHeight, duration: 400, easing: 'easeOutCubic' });
         }
     }
     function createCopyButton(textToCopy) {
@@ -1164,29 +1161,29 @@ document.addEventListener('DOMContentLoaded', () => {
     function createLogoParticles() {
         const container = document.getElementById('initial-logo-view');
         if (!container) return;
-
-        const gridSize = 10; // Reduced from 15 to 10 for better performance
+        const gridSize = 10;
         const containerSize = 100;
         const particleSize = containerSize / gridSize;
         const fragment = document.createDocumentFragment();
-        
         const svgDataURI = `url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23e0e0e0' transform='rotate(45 50 50)'%3E%3Cg transform='translate(-5, 0)'%3E%3Cpath d='M 10 25 A 15 15 0 0 1 25 10 L 75 10 A 15 15 0 0 1 90 25 L 90 45 L 10 45 Z' /%3E%3C/g%3E%3Cg transform='translate(5, 0)'%3E%3Cpath d='M 10 55 L 90 55 L 90 75 A 15 15 0 0 1 75 90 L 25 90 A 15 15 0 0 1 10 75 Z' /%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`;
-
         for (let i = 0; i < gridSize; i++) {
             for (let j = 0; j < gridSize; j++) {
                 const particle = document.createElement('div');
                 particle.classList.add('logo-particle');
-                particle.style.width = `${particleSize}px`;
-                particle.style.height = `${particleSize}px`;
-                particle.style.top = `${i * particleSize}px`;
-                particle.style.left = `${j * particleSize}px`;
-                particle.style.backgroundImage = svgDataURI;
-                particle.style.backgroundPosition = `-${j * particleSize}px -${i * particleSize}px`;
+                Object.assign(particle.style, {
+                    width: `${particleSize}px`, height: `${particleSize}px`,
+                    top: `${i * particleSize}px`, left: `${j * particleSize}px`,
+                    backgroundImage: svgDataURI,
+                    backgroundPosition: `-${j * particleSize}px -${i * particleSize}px`
+                });
                 fragment.appendChild(particle);
             }
         }
-        
         container.appendChild(fragment);
+    }
+    
+    function showChatAreaLoader() {
+        chatArea.innerHTML = `<div class="chat-area-loader"><i class="fa-solid fa-spinner"></i><span>Loading Chat...</span></div>`;
     }
 
     // --- MULTI-CHAT SPECIFIC FUNCTIONS ---
@@ -1194,7 +1191,6 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/api/chats');
             if (!response.ok) {
-                // If unauthorized (not logged in), don't show an error, just means no chats.
                 if (response.status === 401) {
                     document.getElementById('convo-history').innerHTML = '<li><a href="/login">Login to see chat history</a></li>';
                     return;
@@ -1203,7 +1199,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const chats = await response.json();
             const historyList = document.getElementById('convo-history');
-            historyList.innerHTML = ''; // Clear existing list
+            historyList.innerHTML = '';
             if (chats.length === 0) {
                 historyList.innerHTML = '<li><a href="#">No recent chats</a></li>';
             } else {
@@ -1216,13 +1212,34 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (chat.id === state.currentChatId) {
                         a.classList.add('active');
                     }
+                    // FIX: Reworked chat switching logic for reliability
                     a.addEventListener('click', (e) => {
                         e.preventDefault();
+                        if (isRenaming) return;
                         const newChatId = parseInt(a.dataset.chatId);
-                        if (state.currentChatId !== newChatId) {
-                            loadChat(newChatId);
-                        }
+                        if (state.currentChatId === newChatId) return;
+
+                        // 1. Instant UI feedback
+                        document.querySelector('#convo-history a.active')?.classList.remove('active');
+                        a.classList.add('active');
+                        showChatAreaLoader();
+                        window.history.pushState({}, '', `/?chat_id=${newChatId}`);
+                        
+                        // 2. Load the chat content
+                        loadChat(newChatId);
                     });
+                    
+                    a.addEventListener('contextmenu', (e) => { e.preventDefault(); showSidebarContextMenu(e, a); });
+                    let sidebarLongPressTimer;
+                    a.addEventListener('touchstart', e => {
+                        sidebarLongPressTimer = setTimeout(() => {
+                            e.preventDefault();
+                            showSidebarContextMenu({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY }, a);
+                        }, 600);
+                    });
+                    a.addEventListener('touchend', () => clearTimeout(sidebarLongPressTimer));
+                    a.addEventListener('touchmove', () => clearTimeout(sidebarLongPressTimer));
+
                     li.appendChild(a);
                     historyList.appendChild(li);
                 });
@@ -1234,27 +1251,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadChat(chatId) {
-        if (!chatId) return;
+        state.currentChatId = chatId;
         try {
             const response = await fetch(`/api/chats/${chatId}/history`);
             if (!response.ok) throw new Error(`Failed to fetch chat history: ${response.statusText}`);
             
             const history = await response.json();
             chatHistory = history;
-            state.currentChatId = chatId;
             
             startChatExperience(true);
             renderFullChatHistory();
-            
-            // Update URL and sidebar active state
-            window.history.pushState({}, '', `/?chat_id=${chatId}`);
-            document.querySelectorAll('#convo-history li a').forEach(el => {
-                el.classList.toggle('active', parseInt(el.dataset.chatId) === chatId);
-            });
 
         } catch (error) {
             console.error(`Error loading chat ${chatId}:`, error);
-            resetChat(); // Go back to a clean state if loading fails
+            chatArea.innerHTML = `<div class="chat-area-loader"><span>Error loading chat.</span></div>`;
         }
     }
 
@@ -1273,6 +1283,97 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- SIDEBAR CONTEXT MENU ---
+    function showSidebarContextMenu(e, targetElement) {
+        hideContextMenu();
+        sidebarContextTargetElement = targetElement;
+        sidebarContextMenu.style.left = `${e.clientX}px`;
+        sidebarContextMenu.style.top = `${e.clientY}px`;
+        sidebarContextMenu.classList.add('visible');
+        const menuRect = sidebarContextMenu.getBoundingClientRect();
+        if (menuRect.right > window.innerWidth) { sidebarContextMenu.style.left = `${window.innerWidth - menuRect.width - 5}px`; }
+        if (menuRect.bottom > window.innerHeight) { sidebarContextMenu.style.top = `${window.innerHeight - menuRect.height - 5}px`; }
+    }
+    function hideSidebarContextMenu() { sidebarContextMenu.classList.remove('visible'); }
+    document.getElementById('context-rename').addEventListener('click', handleRenameClick);
+    document.getElementById('context-delete').addEventListener('click', handleDeleteClick);
+
+    function handleRenameClick() {
+        if (!sidebarContextTargetElement) return;
+        const anchor = sidebarContextTargetElement;
+        const li = anchor.parentElement;
+        hideSidebarContextMenu();
+        isRenaming = true;
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = anchor.textContent;
+        Object.assign(input.style, {
+            width: '100%', padding: '10px', boxSizing: 'border-box',
+            border: '1px solid var(--accent-color)', borderRadius: '6px',
+            backgroundColor: 'var(--input-bg)', color: 'var(--primary-text-color)',
+            outline: 'none', fontFamily: 'var(--font-family)', fontSize: '16px'
+        });
+
+        li.replaceChild(input, anchor);
+        input.focus(); input.select();
+
+        const finishEditing = async () => {
+            isRenaming = false;
+            const newTitle = input.value.trim();
+            const originalTitle = anchor.textContent;
+            const chatId = anchor.dataset.chatId;
+
+            // Revert to input temporarily to avoid showing the old name
+            li.replaceChild(anchor, input); 
+
+            if (newTitle && newTitle !== originalTitle) {
+                try {
+                    const response = await fetch(`/api/chats/${chatId}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: newTitle })
+                    });
+                    if (!response.ok) throw new Error('Failed to rename chat.');
+                    // FIX: Re-fetch the entire list to ensure UI consistency
+                    await loadChatList();
+                } catch (error) { 
+                    console.error('Rename failed:', error);
+                    alert('Failed to rename chat.');
+                    await loadChatList(); // Reload to show original state
+                }
+            }
+        };
+
+        input.addEventListener('blur', finishEditing);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') input.blur();
+            if (e.key === 'Escape') {
+                isRenaming = false;
+                input.removeEventListener('blur', finishEditing);
+                li.replaceChild(anchor, input);
+            }
+        });
+    }
+
+    async function handleDeleteClick() {
+        if (!sidebarContextTargetElement) return;
+        const anchor = sidebarContextTargetElement;
+        const li = anchor.parentElement;
+        const chatId = parseInt(anchor.dataset.chatId);
+        hideSidebarContextMenu();
+
+        if (window.confirm(`Are you sure you want to delete "${anchor.textContent}"?`)) {
+            try {
+                const response = await fetch(`/api/chats/${chatId}`, { method: 'DELETE' });
+                if (!response.ok) throw new Error('Failed to delete chat.');
+                anime({ targets: li, opacity: 0, translateX: -20, duration: 300, easing: 'easeInCubic', complete: () => li.remove() });
+                if (state.currentChatId === chatId) { resetChat(); }
+            } catch (error) {
+                console.error('Delete failed:', error);
+                alert('Could not delete the chat.');
+            }
+        }
+    }
 
     // --- KICK THINGS OFF ---
     createLogoParticles();

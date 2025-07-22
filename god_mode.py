@@ -1,3 +1,4 @@
+import json
 import html
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, VISUALIZATION_API_KEY, VISUALIZATION_MODEL
@@ -6,7 +7,7 @@ from tools import (
     search_duckduckgo,
     reformulate_query_with_context,
     search_youtube_videos,
-    profile_query,
+    route_query_to_pipeline,
     generate_canvas_visualization,
     _create_error_html_page,
     call_llm,
@@ -17,6 +18,7 @@ from utils import yield_data, _stream_llm_response
 
 def run_god_mode_reasoning(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type_main, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     current_model_config = CONVERSATIONAL_MODEL
     current_api_key = CONVERSATIONAL_API_KEY
     yield yield_data('step', {'status': 'thinking', 'text': 'God Mode: Engaging advanced reasoning...'})
@@ -48,12 +50,13 @@ def run_god_mode_reasoning(query, persona_name, api_key, model_config, chat_hist
 
     for suggestion_chunk in _generate_and_yield_suggestions(query, chat_history, context_for_llm):
         yield suggestion_chunk
+        # This logic is flawed, but keeping as per original. Suggestions are now yielded directly.
         if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
             final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing comprehensive answer...'})
-    main_answer_prompt = f"This is part of an ongoing conversation. User's current query: \"{query}\"\n\nAs an omniscient AI, synthesize ALL your knowledge and CRITICALLY ANALYZE and INTEGRATE the provided research data to give a comprehensive, direct, and insightful answer. Prioritize factual accuracy from the provided data. If information is not explicitly available in the provided data, state that you don't have that specific information, rather than fabricating it. Integrate source information naturally, citing with superscripts (e.g., ¹) if specific facts are used. Do not state 'Source X says...'.\n\nResearch Data:\n{context_for_llm if unique_snippets else 'No specific research data. Rely on your internal knowledge, but be cautious of hallucination and state limitations clearly.'}"
-    stream_response = call_llm(main_answer_prompt, current_api_key, current_model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
+    main_answer_prompt = f"As an omniscient AI, synthesize ALL your knowledge and CRITICALLY ANALYZE and INTEGRATE the provided research data to give a comprehensive, direct, and insightful answer. Prioritize factual accuracy from the provided data. If information is not explicitly available in the provided data, state that you don't have that specific information, rather than fabricating it. Integrate source information naturally, citing with superscripts (e.g., ¹) if specific facts are used. Do not state 'Source X says...'.\n\nResearch Data:\n{context_for_llm if unique_snippets else 'No specific research data. Rely on your internal knowledge, but be cautious of hallucination and state limitations clearly.'}"
+    stream_response = call_llm(main_answer_prompt, current_api_key, current_model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, current_model_config):
@@ -61,7 +64,9 @@ def run_god_mode_reasoning(query, persona_name, api_key, model_config, chat_hist
         yield chunk
     final_data['content'] = full_response_content
 
-    underlying_query_profile = profile_query(query, False, None, None, persona_key=persona_key)
+    # Determine underlying intent without God Mode to see if we should add artifacts
+    underlying_route = route_query_to_pipeline(query, chat_history, None, None, persona_key)
+    underlying_query_profile = underlying_route.get("pipeline")
 
     if underlying_query_profile == "coding":
         yield yield_data('step', {'status': 'thinking', 'text': 'God Mode: Engaging visualization model for direct canvas/iframe output...'})
@@ -92,7 +97,7 @@ Generate the HTML now:"""
             final_data['artifacts'].append(artifact)
             yield yield_data('html_preview', {"html_code": error_html})
 
-    if profile_query(query.lower(), False, None, None, persona_key=persona_key) == 'visualization_request' and underlying_query_profile != "coding":
+    if underlying_query_profile == 'visualization_request':
         yield yield_data('step', {'status': 'thinking', 'text': 'God Mode: Generating requested HTML visualization...'})
         viz_type_hint = "math" if "math" in query.lower() or "equation" in query.lower() else "general"
         canvas_result = generate_canvas_visualization(query, context_data=context_for_llm[:1000], visualization_type=viz_type_hint)
@@ -101,11 +106,10 @@ Generate the HTML now:"""
             final_data['artifacts'].append(artifact)
         yield yield_data(canvas_result['type'], canvas_result)
 
-    # These pipelines already handle their own final_data yielding
-    if profile_query(query.lower(), False, None, None, persona_key=persona_key) == 'image_generation_request' and query_profile_type_main != "image_generation_request":
-        yield from run_image_generation_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs)
-    elif profile_query(query.lower(), False, None, None, persona_key=persona_key) == 'image_search_request' and query_profile_type_main != "image_search_request":
-        yield from run_image_search_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs)
+    if underlying_query_profile == 'image_generation_request':
+        yield from run_image_generation_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type_main, custom_persona_text, persona_key, **kwargs)
+    elif underlying_query_profile == 'image_search_request':
+        yield from run_image_search_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type_main, custom_persona_text, persona_key, **kwargs)
     else:
         yield yield_data('final_response', final_data)
 

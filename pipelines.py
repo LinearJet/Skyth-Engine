@@ -26,7 +26,7 @@ from tools import (
     generate_canvas_visualization, _create_error_html_page, _generate_pdf_from_html_selenium,
     _create_image_gallery_html, scrape_bing_images, scrape_google_images, search_youtube_videos,
     generate_image_from_gemini, generate_image_from_pollinations,
-    _get_image_intent, profile_query, analyze_academic_intent_with_llm, generate_html_preview
+    route_query_to_pipeline, analyze_academic_intent_with_llm, generate_html_preview
 )
 
 # ==============================================================================
@@ -41,8 +41,8 @@ from utils import yield_data, _stream_llm_response
 
 def run_pure_chat(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     yield yield_data('step', {'status': 'thinking', 'text': 'Thinking...'})
-    prompt_content = f"This is part of an ongoing conversation. User's current query: \"{query}\""
-    stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
+    llm_context = kwargs.get('llm_context', '')
+    stream_response = call_llm(query, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, model_config):
@@ -58,6 +58,7 @@ def run_pure_chat(query, persona_name, api_key, model_config, chat_history, is_g
 
 def run_standard_research(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     
     yield yield_data('step', {'status': 'thinking', 'text': 'Planning research strategy...'})
     search_plan = plan_research_steps_with_llm(query, chat_history)
@@ -92,20 +93,14 @@ def run_standard_research(query, persona_name, api_key, model_config, chat_histo
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing information...'})
 
-    is_comparison = any(k in query.lower() for k in [' vs ', 'versus', 'compare', 'difference between'])
-
-    synthesis_prompt = f"""This is part of an ongoing conversation. User's current query: \"{query}\"
-Use your knowledge and the following multi-source research data to answer the user's query directly and comprehensively.
+    synthesis_prompt = f"""Use your knowledge and the following multi-source research data to answer the user's query directly and comprehensively.
 - Synthesize information from all relevant sources to build a coherent answer.
 - Integrate source information naturally, citing with superscripts (e.g., ¹).
 - Do not state 'Source X says...'.
-"""
-    if is_comparison:
-        synthesis_prompt += "\n**IMPORTANT**: The user is asking for a comparison. Present the key differences and similarities clearly. If appropriate, use a Markdown table for a side-by-side comparison."
-    
-    synthesis_prompt += f"\n\n**Research Data:**\n{context_for_llm if unique_snippets else 'No specific research data provided for this query.'}"
+- If the user is asking for a comparison, present the key differences and similarities clearly, using a Markdown table if appropriate.
+\n\n**Research Data:**\n{context_for_llm if unique_snippets else 'No specific research data provided for this query.'}"""
 
-    stream_response = call_llm(synthesis_prompt, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
+    stream_response = call_llm(synthesis_prompt, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, model_config):
@@ -118,7 +113,7 @@ Use your knowledge and the following multi-source research data to answer the us
 
 def run_stock_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     yield yield_data('step', {'status': 'thinking', 'text': 'Analyzing stock query...'})
-
+    llm_context = kwargs.get('llm_context', '')
     ticker = extract_ticker_with_llm(query, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL)
 
     if not ticker:
@@ -170,7 +165,7 @@ You have been provided with key market data for this period. Your task is to pro
 
 {summary_context}
 """
-        stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
+        stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, llm_context=llm_context)
         
         full_response_content = ""
         for chunk in _stream_llm_response(stream_response, model_config):
@@ -190,6 +185,7 @@ You have been provided with key market data for this period. Your task is to pro
 
 def run_youtube_video_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'searching', 'text': 'Fetching YouTube video transcript...'})
     
     url_match = re.search(r'https?:\/\/[^\s]+', query)
@@ -209,7 +205,7 @@ def run_youtube_video_pipeline(query, persona_name, api_key, model_config, chat_
         yield yield_data('step', {'status': 'error', 'text': f'Transcript error: {error}'})
         yield yield_data('step', {'status': 'info', 'text': 'Transcript unavailable, falling back to web search.'})
         fallback_query = f'What is the YouTube video "{video_url}" about?'
-        yield from run_standard_research(fallback_query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key)
+        yield from run_standard_research(fallback_query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs)
         return
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Analyzing video content...'})
@@ -228,12 +224,12 @@ def run_youtube_video_pipeline(query, persona_name, api_key, model_config, chat_
         if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
             final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
-    prompt_content = f"""This is part of an ongoing conversation. The user has asked a question about a YouTube video.
+    prompt_content = f"""The user has asked a question about a YouTube video.
 User's question: "{user_question}"
 Based *only* on the provided video transcript below, answer the user's question. Do not use any external knowledge. If the answer is not in the transcript, say so.
 {context_for_llm}"""
 
-    stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
+    stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, model_config):
@@ -244,8 +240,10 @@ Based *only* on the provided video transcript below, answer the user's question.
     yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Video analysis complete.'})
 
-def run_image_analysis_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, image_data, **kwargs):
+def run_image_analysis_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    image_data = kwargs.get('image_data')
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Analyzing image...'})
     
     artifact = {"type": "image", "content": image_data, "title": "Uploaded Image"}
@@ -295,7 +293,7 @@ def run_image_analysis_pipeline(query, persona_name, api_key, model_config, chat
             
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing final response...'})
 
-    final_prompt = f"""This is part of an ongoing conversation. The user has uploaded an image and asked: "{query}"
+    final_prompt = f"""The user has uploaded an image and asked: "{query}"
 You have been provided with the following context:
 1.  The user's image (which you can see).
 2.  An AI-generated description of the image.
@@ -309,7 +307,7 @@ Your task is to provide a comprehensive answer to the user's query.
 {context_for_llm if context_for_llm.strip() else "No additional context was found. Rely on your direct analysis of the image."}
 """
     
-    stream_response = call_llm(final_prompt, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, image_data=image_data)
+    stream_response = call_llm(final_prompt, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, image_data=image_data, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, model_config):
@@ -320,8 +318,10 @@ Your task is to provide a comprehensive answer to the user's query.
     yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Image analysis complete.'})
 
-def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, image_data, **kwargs):
+def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    image_data = kwargs.get('image_data')
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Preparing image for editing...'})
     
     source_artifact = {"type": "image", "content": image_data, "title": "Source Image"}
@@ -366,7 +366,7 @@ def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_
             yield yield_data('edited_image', {"base64_data": edited_image_base64, "prompt": query, "title": "Edited Image"})
             yield yield_data('step', {'status': 'done', 'text': 'Edit applied successfully.'})
             
-            stream_response_ack = call_llm(text_response, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name)
+            stream_response_ack = call_llm(text_response, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, llm_context=llm_context)
             
             full_response_content = ""
             for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
@@ -390,8 +390,16 @@ def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_
     yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Image editing process complete.'})
 
-def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, file_data, file_name, **kwargs):
+def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    file_data = kwargs.get('file_data')
+    if not file_data:
+        yield yield_data('step', {'status': 'info', 'text': 'No file was provided. Switching to standard research for your query.'})
+        yield from run_standard_research(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs)
+        return
+
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    file_name = kwargs.get('file_name')
+    llm_context = kwargs.get('llm_context', '')
     import pypdf
     yield yield_data('step', {'status': 'thinking', 'text': f'Processing uploaded file: {file_name}'})
 
@@ -401,7 +409,7 @@ def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_
     try:
         decoded_bytes = base64.b64decode(file_data)
         
-        if file_name.lower().endswith('.pdf'):
+        if file_name and file_name.lower().endswith('.pdf'):
             pdf_reader = pypdf.PdfReader(io.BytesIO(decoded_bytes))
             content_parts = [page.extract_text() for page in pdf_reader.pages]
             file_content = "\n\n".join(content_parts)
@@ -440,12 +448,9 @@ def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_
         if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
             final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
-    prompt_content = f"""This is part of an ongoing conversation. The user has asked a question about a file they uploaded.
-User's question: "{query}"
-Based *only* on the provided file content below, answer the user's question. Do not use any external knowledge. If the answer is not in the file, say so.
-"""
+    prompt_content = f"""Based *only* on the provided file content, answer the user's question. Do not use any external knowledge. If the answer is not in the file, say so."""
 
-    stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, file_context=file_context_for_llm)
+    stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, file_context=file_context_for_llm, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, model_config):
@@ -458,6 +463,7 @@ Based *only* on the provided file content below, answer the user's question. Do 
 
 def run_image_search_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Understanding context...'})
     search_query = reformulate_query_with_context(query, chat_history, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL)
     if search_query != query:
@@ -507,7 +513,7 @@ def run_image_search_pipeline(query, persona_name, api_key, model_config, chat_h
         yield yield_data('step', {'status': 'info', 'text': f'No relevant high-quality images found for "{search_term}".'})
         ack_prompt_content = f"Sorry, I couldn't find any relevant high-quality images for '{search_term}' right now."
 
-    stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
+    stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response_ack, model_config):
@@ -520,9 +526,10 @@ def run_image_search_pipeline(query, persona_name, api_key, model_config, chat_h
 
 def run_url_deep_parse_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     url_match = re.search(r'https?:\/\/[^\s]+', query)
     if not url_match:
-        yield from run_standard_research(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key)
+        yield from run_standard_research(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs)
         return
     
     url_to_parse = url_match.group(0)
@@ -566,15 +573,13 @@ def run_url_deep_parse_pipeline(query, persona_name, api_key, model_config, chat
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing page content...'})
 
-    summary_prompt = f"""The user provided this URL for analysis: {url_to_parse}.
-I have scraped the page and extracted its content.
-User's original query was: "{query}"
+    summary_prompt = f"""I have scraped the page at {url_to_parse} and extracted its content.
 Page Title: {parsed_data.get('title', 'N/A')}
 Page Text Content (summary):
 {parsed_data.get('text_content', 'No text content found.')[:4000]}
-Based on the user's query and the scraped content, provide a concise summary or answer the user's question about the page. Mention the key findings (e.g., "The page contains X high-quality images and Y links...").
+Based on the scraped content, provide a concise summary or answer the user's question about the page. Mention the key findings (e.g., "The page contains X high-quality images and Y links...").
 """
-    stream_response = call_llm(summary_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name)
+    stream_response = call_llm(summary_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, model_config):
@@ -587,6 +592,7 @@ Based on the user's query and the scraped content, provide a concise summary or 
 
 def run_deep_research_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Initiating Deep Research Protocol...'})
     
     topic_match = re.search(r'(?:deep research on|research paper about|comprehensive report on|do a full analysis of)\s+(.+)', query, re.IGNORECASE)
@@ -717,7 +723,7 @@ Begin generating the complete, self-contained HTML report now."""
     report_html = ""
     for attempt in range(2):
         try:
-            report_response_obj = call_llm(report_prompt, api_key, model_config, stream=False)
+            report_response_obj = call_llm(report_prompt, api_key, model_config, stream=False, llm_context=llm_context)
             report_response_obj.raise_for_status()
             raw_html = report_response_obj.json()["candidates"][0]["content"]["parts"][0]["text"]
             
@@ -784,6 +790,7 @@ Begin generating the complete, self-contained HTML report now."""
 
 def run_visualization_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Generating requested HTML visualization...'})
     viz_type_hint = "general"
     q_lower = query.lower()
@@ -794,11 +801,11 @@ def run_visualization_pipeline(query, persona_name, api_key, model_config, chat_
         artifact = {"type": "html", "content": canvas_result['html_code'], "title": "Interactive Visualization"}
         final_data['artifacts'].append(artifact)
         yield yield_data(canvas_result['type'], canvas_result)
-        ack_prompt = f"This is part of an ongoing conversation. User asked for a visualization: \"{query}\". The visualization has been generated and displayed. Briefly acknowledge this."
+        ack_prompt = f"The visualization for the user's request has been generated and displayed. Briefly acknowledge this."
     else:
-        ack_prompt = f"This is part of an ongoing conversation. User asked for: \"{query}\". An attempt to generate the visualization was made, but it was not successful. Inform the user."
+        ack_prompt = f"An attempt to generate the visualization for the user's request was made, but it was not successful. Inform the user."
 
-    stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
+    stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
@@ -812,6 +819,7 @@ def run_visualization_pipeline(query, persona_name, api_key, model_config, chat_
 
 def run_html_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Generating HTML preview...'})
     html_result = generate_html_preview(query)
     
@@ -819,11 +827,11 @@ def run_html_pipeline(query, persona_name, api_key, model_config, chat_history, 
         artifact = {"type": "html", "content": html_result['html_code'], "title": "HTML Preview"}
         final_data['artifacts'].append(artifact)
         yield yield_data(html_result['type'], html_result)
-        ack_prompt = f"This is part of an ongoing conversation. An HTML preview for the request '{query}' has been generated. Briefly acknowledge."
+        ack_prompt = f"An HTML preview for the request has been generated. Briefly acknowledge."
     else:
-        ack_prompt = f"This is part of an ongoing conversation. HTML preview for '{query}' could not be generated as requested. Inform the user."
+        ack_prompt = f"An HTML preview for the request could not be generated as requested. Inform the user."
 
-    stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
+    stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
@@ -837,6 +845,7 @@ def run_html_pipeline(query, persona_name, api_key, model_config, chat_history, 
 
 def run_image_generation_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Preparing image generation...'})
     
     yield yield_data('step', {'status': 'thinking', 'text': 'Understanding context...'})
@@ -845,10 +854,6 @@ def run_image_generation_pipeline(query, persona_name, api_key, model_config, ch
         yield yield_data('step', {'status': 'info', 'text': f'Generating image based on context: "{reformulated_query}"'})
 
     prompt_for_image = reformulated_query
-    patterns = [r'(?:generate|create|make|draw)\s+(?:an\s+|a\s+)?(?:image|picture)\s+of\s+(.+)', r'generate image:\s*(.+)', r'create image:\s*(.+)']
-    for p in patterns:
-        match = re.search(p, reformulated_query, re.IGNORECASE)
-        if match: prompt_for_image = match.group(1).strip()
     
     yield yield_data('step', {'status': 'thinking', 'text': f'Generating image for: "{prompt_for_image}" via Gemini...'})
     image_result = generate_image_from_gemini(prompt_for_image)
@@ -861,11 +866,11 @@ def run_image_generation_pipeline(query, persona_name, api_key, model_config, ch
         artifact = {"type": "image", "content": image_result['base64_data'], "title": image_result['prompt']}
         final_data['artifacts'].append(artifact)
         yield yield_data(image_result['type'], image_result)
-        ack_prompt_content = f"This is part of an ongoing conversation. An image was just generated for the prompt '{prompt_for_image}'. Briefly acknowledge this."
+        ack_prompt_content = f"An image was just generated for the prompt '{prompt_for_image}'. Briefly acknowledge this."
     else:
-        ack_prompt_content = f"This is part of an ongoing conversation. An image was attempted for the prompt '{prompt_for_image}', but it could not be generated from any source. Error: {image_result.get('message', 'Unknown error')}. Briefly inform the user."
+        ack_prompt_content = f"An image was attempted for the prompt '{prompt_for_image}', but it could not be generated from any source. Error: {image_result.get('message', 'Unknown error')}. Briefly inform the user."
 
-    stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
+    stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response_ack, model_config):
@@ -878,6 +883,7 @@ def run_image_generation_pipeline(query, persona_name, api_key, model_config, ch
 
 def run_video_search_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Understanding context...'})
     search_query = reformulate_query_with_context(query, chat_history, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL)
     if search_query != query:
@@ -886,10 +892,6 @@ def run_video_search_pipeline(query, persona_name, api_key, model_config, chat_h
     yield yield_data('step', {'status': 'searching', 'text': f'Searching YouTube for: "{search_query[:50]}..."'})
 
     search_term = search_query
-    patterns = [r'video\s+of\s+(.+)', r'find\s+video\s+of\s+(.+)', r'youtube\s+search\s+for\s+(.+)']
-    for p in patterns:
-        match = re.search(p, search_query, re.IGNORECASE)
-        if match: search_term = match.group(1).strip(); break
 
     video_search_results = search_youtube_videos(search_term)
 
@@ -902,7 +904,7 @@ def run_video_search_pipeline(query, persona_name, api_key, model_config, chat_h
         yield yield_data('step', {'status': 'info', 'text': f'No relevant videos found for "{search_term}".'})
         ack_prompt_content = f"Sorry, I couldn't find any relevant videos for '{search_term}' on YouTube right now."
 
-    stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
+    stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key, llm_context=llm_context)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response_ack, model_config):
