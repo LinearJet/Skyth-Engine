@@ -43,10 +43,22 @@ def run_pure_chat(query, persona_name, api_key, model_config, chat_history, is_g
     yield yield_data('step', {'status': 'thinking', 'text': 'Thinking...'})
     prompt_content = f"This is part of an ongoing conversation. User's current query: \"{query}\""
     stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
-    yield from _stream_llm_response(stream_response, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+
+    final_data = {
+        "content": full_response_content, "artifacts": [], "sources": [],
+        "suggestions": [], "imageResults": [], "videoResults": []
+    }
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Response complete.'})
 
 def run_standard_research(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+    
     yield yield_data('step', {'status': 'thinking', 'text': 'Planning research strategy...'})
     search_plan = plan_research_steps_with_llm(query, chat_history)
     yield yield_data('step', {'status': 'info', 'text': f'Executing {len(search_plan)}-step research plan.'})
@@ -68,18 +80,21 @@ def run_standard_research(query, persona_name, api_key, model_config, chat_histo
         yield yield_data('step', {'status': 'info', 'text': 'No specific web results found.'})
     
     unique_snippets = list({v['url']: v for v in all_snippets}.values())
+    final_data['sources'] = unique_snippets
     yield yield_data('sources', unique_snippets)
 
     context_for_llm = "\n\n".join([f"Source [{i+1}] (URL: {s['url']}): {s['title']} - {s['text'][:300]}..." for i, s in enumerate(unique_snippets)])
     
-    yield from _generate_and_yield_suggestions(query, chat_history, context_for_llm)
-    
+    for suggestion_chunk in _generate_and_yield_suggestions(query, chat_history, context_for_llm):
+        yield suggestion_chunk
+        if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
+            final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
+
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing information...'})
 
     is_comparison = any(k in query.lower() for k in [' vs ', 'versus', 'compare', 'difference between'])
 
     synthesis_prompt = f"""This is part of an ongoing conversation. User's current query: \"{query}\"
-
 Use your knowledge and the following multi-source research data to answer the user's query directly and comprehensively.
 - Synthesize information from all relevant sources to build a coherent answer.
 - Integrate source information naturally, citing with superscripts (e.g., ¹).
@@ -91,7 +106,14 @@ Use your knowledge and the following multi-source research data to answer the us
     synthesis_prompt += f"\n\n**Research Data:**\n{context_for_llm if unique_snippets else 'No specific research data provided for this query.'}"
 
     stream_response = call_llm(synthesis_prompt, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
-    yield from _stream_llm_response(stream_response, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Research complete.'})
 
 def run_stock_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
@@ -109,11 +131,14 @@ def run_stock_pipeline(query, persona_name, api_key, model_config, chat_history,
 
     yield yield_data('step', {'status': 'searching', 'text': f'Fetching {time_range.upper()} market data for {ticker}...'})
     
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     stock_data = get_stock_data(ticker, time_range)
 
     if stock_data and "error" not in stock_data:
         yield yield_data('step', {'status': 'thinking', 'text': 'Generating interactive chart...'})
         chart_html = generate_stock_chart_html(ticker, stock_data, time_range)
+        artifact = {"type": "html", "content": chart_html, "title": f"Stock Chart for {ticker}"}
+        final_data['artifacts'].append(artifact)
         yield yield_data('html_preview', {'html_code': chart_html})
         
         latest_price = stock_data[-1]['close']
@@ -146,22 +171,34 @@ You have been provided with key market data for this period. Your task is to pro
 {summary_context}
 """
         stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
-        yield from _stream_llm_response(stream_response, model_config)
+        
+        full_response_content = ""
+        for chunk in _stream_llm_response(stream_response, model_config):
+            full_response_content += json.loads(chunk[6:])['data']
+            yield chunk
+        final_data['content'] = full_response_content
 
     else:
         error_msg = stock_data.get('error', 'an unknown error occurred')
         yield yield_data('step', {'status': 'error', 'text': f'Failed to get data for {ticker}: {error_msg}'})
-        yield yield_data('answer_chunk', f"I'm sorry, I couldn't retrieve the stock data for {ticker}. The reason given was: {error_msg}")
+        full_response_content = f"I'm sorry, I couldn't retrieve the stock data for {ticker}. The reason given was: {error_msg}"
+        final_data['content'] = full_response_content
+        yield yield_data('answer_chunk', full_response_content)
     
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Stock analysis complete.'})
 
 def run_youtube_video_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'searching', 'text': 'Fetching YouTube video transcript...'})
     
     url_match = re.search(r'https?:\/\/[^\s]+', query)
     if not url_match:
         yield yield_data('step', {'status': 'error', 'text': 'Could not find a valid URL in the query.'})
-        yield yield_data('answer_chunk', "I couldn't find a valid URL in your message. Please provide a full YouTube link.")
+        error_content = "I couldn't find a valid URL in your message. Please provide a full YouTube link."
+        yield yield_data('answer_chunk', error_content)
+        final_data['content'] = error_content
+        yield yield_data('final_response', final_data)
         yield yield_data('step', {'status': 'done', 'text': 'Analysis aborted.'})
         return
         
@@ -181,11 +218,15 @@ def run_youtube_video_pipeline(query, persona_name, api_key, model_config, chat_
     if not user_question: user_question = "What is this video about? Provide a concise summary."
 
     source_for_ui = [{"type": "youtube_transcript", "title": "Video Transcript Analysis", "text": f"Successfully loaded transcript for analysis.", "url": video_url}]
+    final_data['sources'] = source_for_ui
     yield yield_data('sources', source_for_ui)
 
     context_for_llm = f"Video Transcript (from {video_url}):\n\n{transcript[:100000]}..."
 
-    yield from _generate_and_yield_suggestions(user_question, chat_history, context_for_llm)
+    for suggestion_chunk in _generate_and_yield_suggestions(user_question, chat_history, context_for_llm):
+        yield suggestion_chunk
+        if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
+            final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
     prompt_content = f"""This is part of an ongoing conversation. The user has asked a question about a YouTube video.
 User's question: "{user_question}"
@@ -193,11 +234,22 @@ Based *only* on the provided video transcript below, answer the user's question.
 {context_for_llm}"""
 
     stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
-    yield from _stream_llm_response(stream_response, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+    
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Video analysis complete.'})
 
 def run_image_analysis_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, image_data, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Analyzing image...'})
+    
+    artifact = {"type": "image", "content": image_data, "title": "Uploaded Image"}
+    final_data['artifacts'].append(artifact)
     yield yield_data('uploaded_image', {"base64_data": image_data, "title": "Uploaded Image"})
 
     description_prompt = "Analyze this image and provide a concise, factual description suitable for a web search. Focus on identifiable objects, people, text, and the overall scene. Do not interpret or add narrative. Output only the description."
@@ -227,6 +279,7 @@ def run_image_analysis_pipeline(query, persona_name, api_key, model_config, chat
         search_query = f"{query} {image_description} {named_entities if named_entities.lower() != 'none' else ''}".strip()
         web_snippets = search_duckduckgo(search_query, max_results=4)
         if web_snippets:
+            final_data['sources'] = web_snippets
             yield yield_data('sources', web_snippets)
         else:
             yield yield_data('step', {'status': 'info', 'text': 'No relevant web results found.'})
@@ -235,33 +288,44 @@ def run_image_analysis_pipeline(query, persona_name, api_key, model_config, chat
     if web_snippets:
         context_for_llm += "Web Search Results:\n" + "\n\n".join([f"Source [{i+1}] (URL: {s['url']}): {s['title']} - {s['text'][:250]}..." for i, s in enumerate(web_snippets)])
 
-    yield from _generate_and_yield_suggestions(query, chat_history, context_for_llm)
+    for suggestion_chunk in _generate_and_yield_suggestions(query, chat_history, context_for_llm):
+        yield suggestion_chunk
+        if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
+            final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
+            
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing final response...'})
 
     final_prompt = f"""This is part of an ongoing conversation. The user has uploaded an image and asked: "{query}"
-
 You have been provided with the following context:
 1.  The user's image (which you can see).
 2.  An AI-generated description of the image.
 3.  A list of specific, named entities identified in the image.
 4.  Relevant web search results based on that context.
-
 Your task is to provide a comprehensive answer to the user's query.
 - Directly analyze the image.
 - Use the web search results and identified entities to add external context, facts, and details that cannot be known from the image alone.
 - Integrate information from all sources naturally. Cite web sources with superscripts (e.g., ¹).
-
 **Provided Context:**
 {context_for_llm if context_for_llm.strip() else "No additional context was found. Rely on your direct analysis of the image."}
 """
     
     stream_response = call_llm(final_prompt, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, image_data=image_data)
-    yield from _stream_llm_response(stream_response, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Image analysis complete.'})
 
 def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, image_data, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Preparing image for editing...'})
     
+    source_artifact = {"type": "image", "content": image_data, "title": "Source Image"}
+    final_data['artifacts'].append(source_artifact)
     yield yield_data('uploaded_image', {"base64_data": image_data, "title": "Source Image for Edit"})
 
     try:
@@ -283,9 +347,7 @@ def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_
         response = image_client.models.generate_content(
             model=IMAGE_GENERATION_MODEL,
             contents=[query, source_image],
-            config=google_types.GenerateContentConfig(
-              response_modalities=['TEXT', 'IMAGE']
-            )
+            config=google_types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE'])
         )
 
         edited_image_bytes = None
@@ -299,30 +361,37 @@ def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_
         
         if edited_image_bytes:
             edited_image_base64 = base64.b64encode(edited_image_bytes).decode('utf-8')
-            yield yield_data('edited_image', {
-                "base64_data": edited_image_base64,
-                "prompt": query,
-                "title": "Edited Image"
-            })
+            edited_artifact = {"type": "image", "content": edited_image_base64, "title": "Edited Image"}
+            final_data['artifacts'].append(edited_artifact)
+            yield yield_data('edited_image', {"base64_data": edited_image_base64, "prompt": query, "title": "Edited Image"})
             yield yield_data('step', {'status': 'done', 'text': 'Edit applied successfully.'})
             
             stream_response_ack = call_llm(text_response, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name)
-            yield from _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL)
+            
+            full_response_content = ""
+            for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
+                full_response_content += json.loads(chunk[6:])['data']
+                yield chunk
+            final_data['content'] = full_response_content
             
         else:
             error_msg = text_response or "The model did not return an edited image. It might have refused the request."
             yield yield_data('step', {'status': 'error', 'text': error_msg})
-            yield yield_data('answer_chunk', f"I'm sorry, I couldn't edit the image. The model said: \"{error_msg}\"")
+            final_data['content'] = f"I'm sorry, I couldn't edit the image. The model said: \"{error_msg}\""
+            yield yield_data('answer_chunk', final_data['content'])
 
     except Exception as e:
         error_msg = f"An error occurred during image editing: {str(e)}"
         print(f"[Image Editing Pipeline] {error_msg}")
         yield yield_data('step', {'status': 'error', 'text': 'An error occurred during editing.'})
+        final_data['content'] = error_msg
         yield yield_data('answer_chunk', error_msg)
 
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Image editing process complete.'})
 
 def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, file_data, file_name, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     import pypdf
     yield yield_data('step', {'status': 'thinking', 'text': f'Processing uploaded file: {file_name}'})
 
@@ -352,30 +421,43 @@ def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_
 
     if error_message:
         yield yield_data('step', {'status': 'error', 'text': error_message})
-        yield yield_data('answer_chunk', f"Error processing file '{file_name}': {error_message}")
+        final_data['content'] = f"Error processing file '{file_name}': {error_message}"
+        yield yield_data('answer_chunk', final_data['content'])
+        yield yield_data('final_response', final_data)
         yield yield_data('step', {'status': 'done', 'text': 'File analysis aborted.'})
         return
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Analyzing file content...'})
     
     source_for_ui = [{"type": "file_upload", "title": f"Analyzed File: {file_name}", "text": f"Successfully loaded and read {len(file_content)} characters.", "url": "#"}]
+    final_data['sources'] = source_for_ui
     yield yield_data('sources', source_for_ui)
 
     file_context_for_llm = f"The user has uploaded a file named '{file_name}'. I have read the full content of the file, which is provided below. I will now answer the user's query based on this content.\n\n--- START OF FILE CONTENT ---\n\n{file_content}\n\n--- END OF FILE CONTENT ---"
 
-    yield from _generate_and_yield_suggestions(query, chat_history, file_context_for_llm)
+    for suggestion_chunk in _generate_and_yield_suggestions(query, chat_history, file_context_for_llm):
+        yield suggestion_chunk
+        if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
+            final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
     prompt_content = f"""This is part of an ongoing conversation. The user has asked a question about a file they uploaded.
 User's question: "{query}"
-
 Based *only* on the provided file content below, answer the user's question. Do not use any external knowledge. If the answer is not in the file, say so.
 """
 
     stream_response = call_llm(prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, file_context=file_context_for_llm)
-    yield from _stream_llm_response(stream_response, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'File analysis complete.'})
 
 def run_image_search_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Understanding context...'})
     search_query = reformulate_query_with_context(query, chat_history, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL)
     if search_query != query:
@@ -417,6 +499,7 @@ def run_image_search_pipeline(query, persona_name, api_key, model_config, chat_h
     unique_results = list({v['image_url']:v for v in all_results}.values())
 
     if unique_results:
+        final_data['imageResults'] = unique_results
         yield yield_data('image_search_results', unique_results)
         yield yield_data('step', {'status': 'done', 'text': 'High-quality image search results provided.'})
         ack_prompt_content = f"I found some high-quality images related to '{search_term}'. They should be displayed now."
@@ -425,10 +508,18 @@ def run_image_search_pipeline(query, persona_name, api_key, model_config, chat_h
         ack_prompt_content = f"Sorry, I couldn't find any relevant high-quality images for '{search_term}' right now."
 
     stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name)
-    yield from _stream_llm_response(stream_response_ack, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response_ack, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Image search process complete.'})
 
 def run_url_deep_parse_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     url_match = re.search(r'https?:\/\/[^\s]+', query)
     if not url_match:
         yield from run_standard_research(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key)
@@ -444,7 +535,10 @@ def run_url_deep_parse_pipeline(query, persona_name, api_key, model_config, chat
         driver = setup_selenium_driver()
         if not driver:
             yield yield_data('step', {'status': 'error', 'text': 'Browser driver could not be initialized for analysis.'})
-            yield yield_data('answer_chunk', "I'm sorry, I was unable to start the browser driver needed to analyze that URL.")
+            error_content = "I'm sorry, I was unable to start the browser driver needed to analyze that URL."
+            yield yield_data('answer_chunk', error_content)
+            final_data['content'] = error_content
+            yield yield_data('final_response', final_data)
             yield yield_data('step', {'status': 'done', 'text': 'Analysis aborted.'})
             return
         
@@ -459,29 +553,40 @@ def run_url_deep_parse_pipeline(query, persona_name, api_key, model_config, chat
     if parsed_data.get('images'):
         high_quality_images = [{"type": "image_search_result", "title": f"High-quality image from {parsed_data['domain']}", "thumbnail_url": img, "image_url": img, "source_url": url_to_parse} for img in parsed_data['images'] if is_high_quality_image(img)]
         if high_quality_images:
+            final_data['imageResults'] = high_quality_images
             yield yield_data('image_search_results', high_quality_images)
     if parsed_data.get('videos'):
-        yield yield_data('video_search_results', [{"type": "video", "title": get_filename_from_url(vid), "thumbnail_url": "", "url": vid, "video_id": ""} for vid in parsed_data['videos']])
+        video_results = [{"type": "video", "title": get_filename_from_url(vid), "thumbnail_url": "", "url": vid, "video_id": ""} for vid in parsed_data['videos']]
+        final_data['videoResults'] = video_results
+        yield yield_data('video_search_results', video_results)
     if parsed_data.get('links'):
-        yield yield_data('sources', [{"type": "web", "title": link['text'] or "Link", "text": link['url'], "url": link['url']} for link in parsed_data['links']])
+        source_links = [{"type": "web", "title": link['text'] or "Link", "text": link['url'], "url": link['url']} for link in parsed_data['links']]
+        final_data['sources'] = source_links
+        yield yield_data('sources', source_links)
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing page content...'})
 
     summary_prompt = f"""The user provided this URL for analysis: {url_to_parse}.
 I have scraped the page and extracted its content.
 User's original query was: "{query}"
-
 Page Title: {parsed_data.get('title', 'N/A')}
 Page Text Content (summary):
 {parsed_data.get('text_content', 'No text content found.')[:4000]}
-
 Based on the user's query and the scraped content, provide a concise summary or answer the user's question about the page. Mention the key findings (e.g., "The page contains X high-quality images and Y links...").
 """
     stream_response = call_llm(summary_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name)
-    yield from _stream_llm_response(stream_response, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'URL analysis complete.'})
 
 def run_deep_research_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Initiating Deep Research Protocol...'})
     
     topic_match = re.search(r'(?:deep research on|research paper about|comprehensive report on|do a full analysis of)\s+(.+)', query, re.IGNORECASE)
@@ -507,7 +612,10 @@ def run_deep_research_pipeline(query, persona_name, api_key, model_config, chat_
     
     if not urls_to_scan:
         yield yield_data('step', {'status': 'error', 'text': 'Could not find any web sources for the research topic.'})
-        yield yield_data('answer_chunk', f"I'm sorry, I couldn't find any initial web sources to conduct deep research on '{topic}'.")
+        error_content = f"I'm sorry, I couldn't find any initial web sources to conduct deep research on '{topic}'."
+        yield yield_data('answer_chunk', error_content)
+        final_data['content'] = error_content
+        yield yield_data('final_response', final_data)
         yield yield_data('step', {'status': 'done', 'text': 'Research aborted.'})
         return
 
@@ -516,6 +624,10 @@ def run_deep_research_pipeline(query, persona_name, api_key, model_config, chat_
     driver = setup_selenium_driver()
     if not driver:
         yield yield_data('step', {'status': 'error', 'text': 'Browser driver failed, cannot conduct deep research.'})
+        error_content = "I'm sorry, the browser driver failed, so I can't conduct deep research right now."
+        yield yield_data('answer_chunk', error_content)
+        final_data['content'] = error_content
+        yield yield_data('final_response', final_data)
         return
 
     all_scraped_content = []
@@ -657,8 +769,13 @@ Begin generating the complete, self-contained HTML report now."""
     <body><div class="toolbar"><h1>Report: {html.escape(topic)}</h1><div class="actions"><a href="data:text/markdown;charset=utf-8;base64,{md_b64}" download="report-{uuid.uuid4().hex[:6]}.md">Download .MD</a><a href="data:application/pdf;base64,{pdf_b64}" download="report-{uuid.uuid4().hex[:6]}.pdf" class="{'disabled' if not pdf_b64 else ''}">Download .PDF</a></div></div>
     <iframe class="content-frame" srcdoc="{html.escape(report_html)}"></iframe></body></html>
     """
-
+    
+    artifact = {"type": "html", "content": viewer_html, "title": f"Deep Research Report: {topic}"}
+    final_data['artifacts'].append(artifact)
     yield yield_data('html_preview', {'html_code': viewer_html})
+    
+    final_data['content'] = f"I have completed the deep research report on '{topic}'. An interactive preview has been generated."
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Deep research report complete and packaged.'})
 
     driver.quit()
@@ -666,33 +783,60 @@ Begin generating the complete, self-contained HTML report now."""
 
 
 def run_visualization_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Generating requested HTML visualization...'})
     viz_type_hint = "general"
     q_lower = query.lower()
     if "math" in q_lower or "equation" in q_lower or "function" in q_lower: viz_type_hint = "math"
     canvas_result = generate_canvas_visualization(query, visualization_type=viz_type_hint)
-    yield yield_data(canvas_result['type'], canvas_result)
-    ack_prompt = f"This is part of an ongoing conversation. User asked for a visualization: \"{query}\". The visualization has been generated and displayed. Briefly acknowledge this."
-    if canvas_result['type'] == 'canvas_visualization' and "could not be generated" in canvas_result.get('html_code','').lower() :
+    
+    if canvas_result['type'] == 'canvas_visualization' and "could not be generated" not in canvas_result.get('html_code','').lower():
+        artifact = {"type": "html", "content": canvas_result['html_code'], "title": "Interactive Visualization"}
+        final_data['artifacts'].append(artifact)
+        yield yield_data(canvas_result['type'], canvas_result)
+        ack_prompt = f"This is part of an ongoing conversation. User asked for a visualization: \"{query}\". The visualization has been generated and displayed. Briefly acknowledge this."
+    else:
         ack_prompt = f"This is part of an ongoing conversation. User asked for: \"{query}\". An attempt to generate the visualization was made, but it was not successful. Inform the user."
+
     stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
-    yield from _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Visualization request processed.'})
 
 
 def run_html_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Generating HTML preview...'})
     html_result = generate_html_preview(query)
-    yield yield_data(html_result['type'], html_result)
-    ack_prompt = f"This is part of an ongoing conversation. An HTML preview for the request '{query}' has been generated. Briefly acknowledge."
-    if html_result['type'] == 'html_preview' and "could not generate" in html_result.get('html_code','').lower():
+    
+    if html_result['type'] == 'html_preview' and "could not generate" not in html_result.get('html_code','').lower():
+        artifact = {"type": "html", "content": html_result['html_code'], "title": "HTML Preview"}
+        final_data['artifacts'].append(artifact)
+        yield yield_data(html_result['type'], html_result)
+        ack_prompt = f"This is part of an ongoing conversation. An HTML preview for the request '{query}' has been generated. Briefly acknowledge."
+    else:
         ack_prompt = f"This is part of an ongoing conversation. HTML preview for '{query}' could not be generated as requested. Inform the user."
+
     stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
-    yield from _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'HTML preview processed.'})
 
 
 def run_image_generation_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Preparing image generation...'})
     
     yield yield_data('step', {'status': 'thinking', 'text': 'Understanding context...'})
@@ -713,16 +857,27 @@ def run_image_generation_pipeline(query, persona_name, api_key, model_config, ch
         yield yield_data('step', {'status': 'warning', 'text': f"Gemini failed: {image_result.get('message', '')}. Falling back to Pollinations.ai..."})
         image_result = generate_image_from_pollinations(prompt_for_image)
     
-    yield yield_data(image_result['type'], image_result)
-
-    ack_prompt_content = f"This is part of an ongoing conversation. An image was just generated for the prompt '{prompt_for_image}'. Briefly acknowledge this."
-    if image_result['type'] == 'error':
+    if image_result['type'] != 'error':
+        artifact = {"type": "image", "content": image_result['base64_data'], "title": image_result['prompt']}
+        final_data['artifacts'].append(artifact)
+        yield yield_data(image_result['type'], image_result)
+        ack_prompt_content = f"This is part of an ongoing conversation. An image was just generated for the prompt '{prompt_for_image}'. Briefly acknowledge this."
+    else:
         ack_prompt_content = f"This is part of an ongoing conversation. An image was attempted for the prompt '{prompt_for_image}', but it could not be generated from any source. Error: {image_result.get('message', 'Unknown error')}. Briefly inform the user."
+
     stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
-    yield from _stream_llm_response(stream_response_ack, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response_ack, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Image generation process complete.'})
 
 def run_video_search_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Understanding context...'})
     search_query = reformulate_query_with_context(query, chat_history, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL)
     if search_query != query:
@@ -739,6 +894,7 @@ def run_video_search_pipeline(query, persona_name, api_key, model_config, chat_h
     video_search_results = search_youtube_videos(search_term)
 
     if video_search_results:
+        final_data['videoResults'] = video_search_results
         yield yield_data('video_search_results', video_search_results)
         yield yield_data('step', {'status': 'done', 'text': 'Video search results provided.'})
         ack_prompt_content = f"I found some videos about '{search_term}'. They should be displayed now. I can summarize them or answer questions if you'd like."
@@ -747,5 +903,12 @@ def run_video_search_pipeline(query, persona_name, api_key, model_config, chat_h
         ack_prompt_content = f"Sorry, I couldn't find any relevant videos for '{search_term}' on YouTube right now."
 
     stream_response_ack = call_llm(ack_prompt_content, api_key, model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
-    yield from _stream_llm_response(stream_response_ack, model_config)
+    
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response_ack, model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+        
+    final_data['content'] = full_response_content
+    yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Video search process complete.'})

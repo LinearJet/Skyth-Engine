@@ -16,6 +16,7 @@ from pipelines import run_image_generation_pipeline, run_image_search_pipeline
 from utils import yield_data, _stream_llm_response
 
 def run_god_mode_reasoning(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type_main, custom_persona_text, persona_key, **kwargs):
+    final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     current_model_config = CONVERSATIONAL_MODEL
     current_api_key = CONVERSATIONAL_API_KEY
     yield yield_data('step', {'status': 'thinking', 'text': 'God Mode: Engaging advanced reasoning...'})
@@ -40,17 +41,25 @@ def run_god_mode_reasoning(query, persona_name, api_key, model_config, chat_hist
 
     if not all_text_snippets: yield yield_data('step', {'status': 'info', 'text': 'No specific text results from research tools.'})
     unique_snippets = list({s['url']: s for s in all_text_snippets if s.get('url')}.values())
+    final_data['sources'] = unique_snippets
     yield yield_data('sources', unique_snippets)
 
     context_for_llm = "\n\n".join([f"Source [{i+1}] ({s['type']} - URL: {s['url']}): {s.get('title', '')} - {s['text'][:200]}..." for i, s in enumerate(unique_snippets)])
 
-    yield from _generate_and_yield_suggestions(query, chat_history, context_for_llm)
+    for suggestion_chunk in _generate_and_yield_suggestions(query, chat_history, context_for_llm):
+        yield suggestion_chunk
+        if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
+            final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing comprehensive answer...'})
     main_answer_prompt = f"This is part of an ongoing conversation. User's current query: \"{query}\"\n\nAs an omniscient AI, synthesize ALL your knowledge and CRITICALLY ANALYZE and INTEGRATE the provided research data to give a comprehensive, direct, and insightful answer. Prioritize factual accuracy from the provided data. If information is not explicitly available in the provided data, state that you don't have that specific information, rather than fabricating it. Integrate source information naturally, citing with superscripts (e.g., ¹) if specific facts are used. Do not state 'Source X says...'.\n\nResearch Data:\n{context_for_llm if unique_snippets else 'No specific research data. Rely on your internal knowledge, but be cautious of hallucination and state limitations clearly.'}"
     stream_response = call_llm(main_answer_prompt, current_api_key, current_model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
     
-    yield from _stream_llm_response(stream_response, current_model_config)
+    full_response_content = ""
+    for chunk in _stream_llm_response(stream_response, current_model_config):
+        full_response_content += json.loads(chunk[6:])['data']
+        yield chunk
+    final_data['content'] = full_response_content
 
     underlying_query_profile = profile_query(query, False, None, None, persona_key=persona_key)
 
@@ -68,22 +77,36 @@ Generate the HTML now:"""
             coding_response_obj = call_llm(coding_canvas_prompt, VISUALIZATION_API_KEY, VISUALIZATION_MODEL, stream=False)
             generated_html_code = coding_response_obj.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
             if generated_html_code.lower().startswith(('<!doctype html>', '<html')):
+                artifact = {"type": "html", "content": generated_html_code, "title": "Interactive Code Preview"}
+                final_data['artifacts'].append(artifact)
                 yield yield_data('html_preview', {"html_code": generated_html_code})
                 yield yield_data('step', {'status': 'done', 'text': 'Advanced code generated for canvas/iframe.'})
             else:
-                yield yield_data('html_preview', {"html_code": _create_error_html_page(f"Model did not return valid HTML for the coding request: {html.escape(query)}. Output:\n{html.escape(generated_html_code[:500])}...")})
+                error_html = _create_error_html_page(f"Model did not return valid HTML for the coding request: {html.escape(query)}. Output:\n{html.escape(generated_html_code[:500])}...")
+                artifact = {"type": "html", "content": error_html, "title": "HTML Generation Error"}
+                final_data['artifacts'].append(artifact)
+                yield yield_data('html_preview', {"html_code": error_html})
         except Exception as e:
-            yield yield_data('html_preview', {"html_code": _create_error_html_page(f"Exception during advanced code generation for '{html.escape(query)}': {html.escape(str(e))}")})
+            error_html = _create_error_html_page(f"Exception during advanced code generation for '{html.escape(query)}': {html.escape(str(e))}")
+            artifact = {"type": "html", "content": error_html, "title": "HTML Generation Error"}
+            final_data['artifacts'].append(artifact)
+            yield yield_data('html_preview', {"html_code": error_html})
 
     if profile_query(query.lower(), False, None, None, persona_key=persona_key) == 'visualization_request' and underlying_query_profile != "coding":
         yield yield_data('step', {'status': 'thinking', 'text': 'God Mode: Generating requested HTML visualization...'})
         viz_type_hint = "math" if "math" in query.lower() or "equation" in query.lower() else "general"
         canvas_result = generate_canvas_visualization(query, context_data=context_for_llm[:1000], visualization_type=viz_type_hint)
+        if canvas_result['type'] == 'canvas_visualization':
+            artifact = {"type": "html", "content": canvas_result['html_code'], "title": "Interactive Visualization"}
+            final_data['artifacts'].append(artifact)
         yield yield_data(canvas_result['type'], canvas_result)
 
+    # These pipelines already handle their own final_data yielding
     if profile_query(query.lower(), False, None, None, persona_key=persona_key) == 'image_generation_request' and query_profile_type_main != "image_generation_request":
         yield from run_image_generation_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs)
     elif profile_query(query.lower(), False, None, None, persona_key=persona_key) == 'image_search_request' and query_profile_type_main != "image_search_request":
         yield from run_image_search_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs)
+    else:
+        yield yield_data('final_response', final_data)
 
     yield yield_data('step', {'status': 'done', 'text': 'God Mode processing complete.'})

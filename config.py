@@ -44,12 +44,14 @@ google = oauth.register(
 CONVERSATIONAL_MODEL = os.getenv("CONVERSATIONAL_MODEL", "gemini/gemini-2.5-flash-lite-preview-06-17")
 VISUALIZATION_MODEL = os.getenv("VISUALIZATION_MODEL", "gemini/gemini-2.5-flash")
 REASONING_MODEL = os.getenv("REASONING_MODEL", "gemini/gemini-2.5-pro")
+UTILITY_MODEL = os.getenv("UTILITY_MODEL", "gemini/gemini-2.5-flash-lite-preview-06-17")
 IMAGE_GENERATION_MODEL = "gemini-2.0-flash-preview-image-generation"
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CONVERSATIONAL_API_KEY = GEMINI_API_KEY
 REASONING_API_KEY = GEMINI_API_KEY
 VISUALIZATION_API_KEY = GEMINI_API_KEY
+UTILITY_API_KEY = GEMINI_API_KEY
 IMAGE_GENERATION_API_KEY = GEMINI_API_KEY
 
 print("🔑 Gemini Key:", "Loaded" if GEMINI_API_KEY else "NOT FOUND")

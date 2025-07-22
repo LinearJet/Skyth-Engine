@@ -484,7 +484,7 @@ def get_youtube_transcript(video_url):
 def get_current_datetime_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
 
-def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=None, persona_name="AI Assistant", custom_persona_text=None, persona_key="default", image_data=None, file_context=None):
+def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=None, persona_name="AI Assistant", custom_persona_text=None, persona_key="default", image_data=None, file_context=None, user_preferences=None):
     """
     Unified LLM calling function, exclusively for Google Gemini models.
     """
@@ -505,6 +505,11 @@ def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=N
         "9.  **Voice Synthesis:** The user can have your responses converted to speech via a separate frontend action. "
         "Acknowledge and use these tools when a user's request implies them. Do NOT claim you are 'only a text-based AI'. Do not introduce yourself unless asked."
     )
+
+    if user_preferences:
+        pref_list = [f"- {pref}" for pref in user_preferences]
+        pref_str = "Based on past conversations, you know the following about the user's preferences:\n" + "\n".join(pref_list)
+        base_system_message = f"{pref_str}\n\n{base_system_message}"
 
     final_system_message = custom_persona_text.strip() if persona_key == "custom" and custom_persona_text else base_system_message
     api_type, model_id_part = model_config.split('/', 1)
@@ -599,7 +604,7 @@ def plan_research_steps_with_llm(query, chat_history):
     """
     history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-10:]])
     planning_prompt = f"""
-You are an expert AI research assistant. Your task is to decompose a user's request into a series of up to 3 precise, self-contained search engine queries. This will enable parallel research on different facets of the topic.
+You are an expert AI research assistant. Your task is to decompose a user's request into a series of up to 3 precise, self-contained search queries. This will enable parallel research on different facets of the topic.
 
 **CRITICAL INSTRUCTIONS:**
 1.  **Decomposition:** Break down the user's query into logical sub-questions.

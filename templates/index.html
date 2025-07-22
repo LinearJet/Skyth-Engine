@@ -15,12 +15,14 @@
 
     <!-- MathJax for Math Rendering -->
     <script>
+        // <!-- FIX: Switched from SVG to CHTML output for more robust rendering -->
         MathJax = {
           tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
-          svg: { fontCache: 'global' }
+          chtml: { fontfamily: 'TeX' }
         };
     </script>
-    <script type="text/javascript" id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+    <!-- FIX: Changed script from tex-svg.js to tex-chtml.js -->
+    <script type="text/javascript" id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
 
     <style>
         :root {
@@ -139,7 +141,8 @@
         .bot-message { align-self: stretch; max-width: 100%; padding: 10px 0; }
         .bot-message-content { 
             display: flex; flex-direction: column; gap: 10px;
-            min-width: 0; /* Prevents flex items from overflowing their container */
+            /* FIX: Prevents flex items from overflowing their container, fixing the mobile layout bug */
+            min-width: 0; 
         }
         .bot-message-content p:last-child { margin-bottom: 0; }
         
@@ -181,7 +184,7 @@
             position: relative; z-index: 2; background: #1e1e1e; 
             border-radius: 12px; padding: 10px 12px; 
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            overflow: hidden; /* FIX: Prevents internal content from breaking layout */
+            overflow: hidden;
         }
         .artifact-thumbnail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
         .artifact-thumbnail-header span { font-weight: bold; font-size: 14px; }
@@ -379,18 +382,19 @@
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE & CONFIG ---
-    let state = { 
-        model: 'gemini/gemini-2.5-flash-lite-preview-06-17', 
+    let state = {
+        model: 'gemini/gemini-2.5-flash-lite-preview-06-17',
         currentPersona: 'default',
-        deepSearchMode: 'none', 
-        isIncognito: sessionStorage.getItem('skythIncognito') === 'true', 
-        isChatActive: false, 
-        attachedImageData: null, 
-        attachedFileData: null, 
-        attachedFileName: null 
+        deepSearchMode: 'none',
+        isIncognito: false, // Incognito is now managed by not having a chat_id
+        isChatActive: false,
+        attachedImageData: null,
+        attachedFileData: null,
+        attachedFileName: null,
+        currentChatId: null // This is the key for multi-chat
     };
     let currentArtifact = { code: null, type: null, title: null };
-    let chatHistory = [];
+    let chatHistory = []; // This will now hold the history for the CURRENT chat only
     let currentPlayingAudio = null;
 
     // --- DOM ELEMENTS ---
@@ -424,20 +428,24 @@ document.addEventListener('DOMContentLoaded', () => {
     let longPressTimer, contextTargetElement = null;
 
     // --- INITIALIZATION & CORE UI FLOW ---
-    function initializeChat() {
-        incognitoToggle.classList.toggle('active', state.isIncognito);
-        const savedHistory = sessionStorage.getItem('skythChatHistory');
+    async function initializeChat() {
+        // We don't use sessionStorage anymore for history
         const initialLogo = document.getElementById('initial-logo-view');
+        
+        // Check if a chat was loaded from the backend
+        const urlParams = new URLSearchParams(window.location.search);
+        const chatIdFromUrl = urlParams.get('chat_id');
 
-        if (savedHistory) {
-            const parsedHistory = JSON.parse(savedHistory);
-            if (parsedHistory.length > 0) {
-                chatHistory = parsedHistory;
-                if(initialLogo) initialLogo.style.display = 'none';
-                renderFullChatHistory();
-                startChatExperience(true); // Start silently to manage icon states
-            }
+        if (chatIdFromUrl) {
+            await loadChat(chatIdFromUrl);
+        } else {
+            // No chat loaded, show the initial view
+            if (initialLogo) initialLogo.style.display = 'block';
         }
+        
+        // Always load the chat list for the sidebar
+        await loadChatList();
+        
         animatePageIn();
     }
 
@@ -480,9 +488,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function resetChat() {
-        sessionStorage.removeItem('skythChatHistory');
-        sessionStorage.removeItem('skythIncognito');
-        window.location.reload();
+        // Instead of reloading, just clear the state and UI
+        state.currentChatId = null;
+        state.isChatActive = false;
+        chatHistory = [];
+        chatArea.innerHTML = '';
+        document.getElementById('initial-logo-view')?.remove(); // Ensure it's gone
+        
+        // Create the logo view again if it was removed
+        if (!document.getElementById('initial-logo-view')) {
+            const logoView = document.createElement('div');
+            logoView.id = 'initial-logo-view';
+            document.getElementById('main-content').prepend(logoView);
+            createLogoParticles();
+        }
+        
+        // Reset header icons
+        incognitoToggle.style.display = 'inline-block';
+        anime({ targets: incognitoToggle, opacity: 1, duration: 300, easing: 'easeInCubic' });
+        const newChatIcon = document.getElementById('new-chat-header-btn');
+        if (newChatIcon.style.display !== 'none') {
+            anime({ targets: newChatIcon, opacity: 0, duration: 300, easing: 'easeOutCubic', complete: () => newChatIcon.style.display = 'none' });
+        }
+
+        // Clear the active state in the sidebar
+        document.querySelectorAll('#convo-history li a.active').forEach(el => el.classList.remove('active'));
+        
+        // Update URL
+        window.history.pushState({}, '', '/');
     }
     
     // --- EVENT LISTENERS ---
@@ -567,51 +600,26 @@ document.addEventListener('DOMContentLoaded', () => {
         const prompt = promptInput.value.trim();
         if (!prompt && !state.attachedImageData && !state.attachedFileData) return;
 
-        // --- MOBILE IMAGE GENERATION OVERRIDE ---
-        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
-        const imageGenKeywords = ["generate image of", "create an image of", "make a picture of", "draw a picture of", "generate an image of", "create image:", "generate picture:"];
-        const isImageGenRequest = imageGenKeywords.some(k => prompt.toLowerCase().trim().startsWith(k));
-
-        if (isMobile && isImageGenRequest) {
-            if (!state.isChatActive) startChatExperience();
-            
-            let corePrompt = prompt;
-            for (const keyword of imageGenKeywords) {
-                const regex = new RegExp(`^${keyword.replace(/ /g, '\\s+')}`, 'i');
-                if (regex.test(prompt.trim())) {
-                    corePrompt = prompt.trim().replace(regex, '').trim();
-                    break;
-                }
-            }
-
-            appendUserMessage(prompt);
-            chatHistory.push({ role: 'user', content: prompt });
-
-            const encodedPrompt = encodeURIComponent(corePrompt);
-            const seed = Math.floor(Math.random() * 1000000);
-            const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true&seed=${seed}`;
-            
-            const botMessageData = { 
-                role: 'assistant', 
-                content: `Here is the image I generated for: *"${corePrompt}"*`,
-                artifacts: [{ type: 'image_from_url', content: imageUrl, title: `Image: ${corePrompt}` }],
-                sources: [], suggestions: [], imageResults: [], videoResults: [] 
-            };
-            
-            renderCompleteBotMessage(botMessageData);
-            chatHistory.push(botMessageData);
-            
-            promptInput.value = ''; 
-            autoResizeTextarea(promptInput); 
-            sendButton.disabled = true;
-            if (!state.isIncognito) {
-                sessionStorage.setItem('skythChatHistory', JSON.stringify(chatHistory));
-            }
-            return; // Bypass backend call
-        }
-        // --- END OVERRIDE ---
-
         if (!state.isChatActive) startChatExperience();
+        
+        // If this is the first message of a new chat, create it first
+        if (!state.currentChatId) {
+            try {
+                const newChat = await createNewChat(prompt.substring(0, 50)); // Use first 50 chars for title
+                if (newChat && newChat.id) {
+                    state.currentChatId = newChat.id;
+                    await loadChatList(); // Refresh sidebar with new chat
+                    window.history.pushState({}, '', `/?chat_id=${state.currentChatId}`); // Update URL
+                } else {
+                    throw new Error("Failed to create a new chat on the backend.");
+                }
+            } catch (error) {
+                console.error("Error creating new chat:", error);
+                const errorMsgData = { role: 'assistant', content: `Sorry, I couldn't start a new chat: <br><pre>${error.message}</pre>`, artifacts: [], sources: [], suggestions: [], imageResults: [], videoResults: [] };
+                renderCompleteBotMessage(errorMsgData);
+                return;
+            }
+        }
         
         const userMessageData = { role: 'user', content: prompt };
         if (state.attachedImageData) userMessageData.imageData = state.attachedImageData;
@@ -622,9 +630,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const animator = createThinkingAnimator();
 
-        const payload = { 
-            query: prompt, persona: state.currentPersona, is_god_mode: state.deepSearchMode === 'god_mode_reasoning',
-            history: chatHistory.slice(-10), image_data: state.attachedImageData, file_data: state.attachedFileData, file_name: state.attachedFileName 
+        const payload = {
+            query: prompt,
+            persona: state.currentPersona,
+            is_god_mode: state.deepSearchMode === 'god_mode_reasoning',
+            history: chatHistory.slice(-10),
+            image_data: state.attachedImageData,
+            file_data: state.attachedFileData,
+            file_name: state.attachedFileName,
+            chat_id: state.currentChatId // <-- SEND THE CHAT ID
         };
         if (state.attachedFileData || state.attachedImageData) removeAttachmentPreview();
 
@@ -639,7 +653,7 @@ document.addEventListener('DOMContentLoaded', () => {
             chatHistory.push(errorMsgData);
         } finally {
             sendButton.disabled = promptInput.value.trim() === '' && !state.attachedImageData && !state.attachedFileData;
-            if (!state.isIncognito) sessionStorage.setItem('skythChatHistory', JSON.stringify(chatHistory));
+            // No more sessionStorage
         }
     }
 
@@ -698,6 +712,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             case 'image_search_results': botMessageData.imageResults = json.data; break;
                             case 'video_search_results': botMessageData.videoResults = json.data; break;
+                            // This case is new, it's where the backend sends the full object to be saved
+                            case 'final_response':
+                                const finalData = json.data;
+                                botMessageData.content = finalData.content || botMessageData.content;
+                                botMessageData.artifacts = finalData.artifacts || botMessageData.artifacts;
+                                botMessageData.sources = finalData.sources || botMessageData.sources;
+                                botMessageData.suggestions = finalData.suggestions || botMessageData.suggestions;
+                                botMessageData.imageResults = finalData.imageResults || botMessageData.imageResults;
+                                botMessageData.videoResults = finalData.videoResults || botMessageData.videoResults;
+                                break;
                         }
                         if (wasAtBottom) scrollToBottom();
                     } catch (e) { console.warn("Error parsing stream data:", e, "Data:", dataStr); }
@@ -1164,6 +1188,91 @@ document.addEventListener('DOMContentLoaded', () => {
         
         container.appendChild(fragment);
     }
+
+    // --- MULTI-CHAT SPECIFIC FUNCTIONS ---
+    async function loadChatList() {
+        try {
+            const response = await fetch('/api/chats');
+            if (!response.ok) {
+                // If unauthorized (not logged in), don't show an error, just means no chats.
+                if (response.status === 401) {
+                    document.getElementById('convo-history').innerHTML = '<li><a href="/login">Login to see chat history</a></li>';
+                    return;
+                }
+                throw new Error(`Failed to fetch chat list: ${response.statusText}`);
+            }
+            const chats = await response.json();
+            const historyList = document.getElementById('convo-history');
+            historyList.innerHTML = ''; // Clear existing list
+            if (chats.length === 0) {
+                historyList.innerHTML = '<li><a href="#">No recent chats</a></li>';
+            } else {
+                chats.forEach(chat => {
+                    const li = document.createElement('li');
+                    const a = document.createElement('a');
+                    a.href = `/?chat_id=${chat.id}`;
+                    a.textContent = chat.title;
+                    a.dataset.chatId = chat.id;
+                    if (chat.id === state.currentChatId) {
+                        a.classList.add('active');
+                    }
+                    a.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const newChatId = parseInt(a.dataset.chatId);
+                        if (state.currentChatId !== newChatId) {
+                            loadChat(newChatId);
+                        }
+                    });
+                    li.appendChild(a);
+                    historyList.appendChild(li);
+                });
+            }
+        } catch (error) {
+            console.error("Error loading chat list:", error);
+            document.getElementById('convo-history').innerHTML = '<li><a>Error loading chats</a></li>';
+        }
+    }
+
+    async function loadChat(chatId) {
+        if (!chatId) return;
+        try {
+            const response = await fetch(`/api/chats/${chatId}/history`);
+            if (!response.ok) throw new Error(`Failed to fetch chat history: ${response.statusText}`);
+            
+            const history = await response.json();
+            chatHistory = history;
+            state.currentChatId = chatId;
+            
+            startChatExperience(true);
+            renderFullChatHistory();
+            
+            // Update URL and sidebar active state
+            window.history.pushState({}, '', `/?chat_id=${chatId}`);
+            document.querySelectorAll('#convo-history li a').forEach(el => {
+                el.classList.toggle('active', parseInt(el.dataset.chatId) === chatId);
+            });
+
+        } catch (error) {
+            console.error(`Error loading chat ${chatId}:`, error);
+            resetChat(); // Go back to a clean state if loading fails
+        }
+    }
+
+    async function createNewChat(title) {
+        try {
+            const response = await fetch('/api/chats', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: title || 'New Chat' })
+            });
+            if (!response.ok) throw new Error('Failed to create new chat on server');
+            return await response.json();
+        } catch (error) {
+            console.error("Error creating new chat:", error);
+            return null;
+        }
+    }
+
 
     // --- KICK THINGS OFF ---
     createLogoParticles();

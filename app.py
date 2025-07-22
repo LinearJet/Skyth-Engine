@@ -8,12 +8,13 @@ import random
 
 from flask import request, Response, stream_with_context, send_from_directory, render_template, jsonify, session, url_for, redirect
 from flask_cors import CORS
+from tinydb import Query
 
-from config import app, DATABASE, CONVERSATIONAL_MODEL, REASONING_MODEL, VISUALIZATION_MODEL, CONVERSATIONAL_API_KEY, REASONING_API_KEY, VISUALIZATION_API_KEY, EDGE_TTS_VOICE_MAPPING, CATEGORIES, ARTICLE_LIST_CACHE_DURATION, CACHE, oauth, USER_DB
+from config import app, DATABASE, CONVERSATIONAL_MODEL, REASONING_MODEL, VISUALIZATION_MODEL, CONVERSATIONAL_API_KEY, REASONING_API_KEY, VISUALIZATION_API_KEY, UTILITY_API_KEY, UTILITY_MODEL, EDGE_TTS_VOICE_MAPPING, CATEGORIES, ARTICLE_LIST_CACHE_DURATION, CACHE, oauth, USER_DB
 from tools import (
     get_persona_prompt_name, profile_query, get_trending_news_topics,
     parse_with_bs4, get_article_content_tiered,
-    setup_selenium_driver
+    setup_selenium_driver, call_llm
 )
 from pipelines import (
     run_pure_chat, run_visualization_pipeline,
@@ -34,6 +35,71 @@ from custom import run_custom_pipeline
 
 # Apply CORS to the app object from config
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# ==============================================================================
+# AI UTILITY FUNCTIONS
+# ==============================================================================
+def generate_chat_title(query, final_answer_content):
+    prompt = f"""
+    Based on the user's first query and the AI's answer, create a very short, concise title for this conversation (max 5 words).
+    The title should capture the main topic or essence of the conversation.
+    
+    User Query: "{query}"
+    AI Answer: "{final_answer_content[:300]}..."
+    
+    Title:
+    """
+    try:
+        response = call_llm(prompt, UTILITY_API_KEY, UTILITY_MODEL, stream=False)
+        title = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip().strip('"')
+        return title if title else "New Chat"
+    except Exception as e:
+        print(f"Error generating chat title: {e}")
+        return "New Chat"
+
+def get_user_preferences(user_id):
+    User = Query()
+    result = USER_DB.search(User.user_id == user_id)
+    return result[0].get('preferences', []) if result else []
+
+def extract_and_save_user_preferences(user_id, full_turn_history):
+    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in full_turn_history])
+    prompt = f"""
+    Analyze the following conversation turn. Your goal is to identify and extract one key user preference that could be useful for personalizing future interactions.
+    A preference is a long-term trait, not a one-time request.
+    
+    Examples of good preferences to extract:
+    - "User prefers Python for coding examples."
+    - "User is a beginner in programming."
+    - "User is interested in space exploration and astrophysics."
+    - "User likes responses to be structured with bullet points."
+    
+    Examples of bad things to extract (one-time requests):
+    - "User asked for a picture of a cat."
+    - "User wants to know the weather."
+
+    Based on the conversation, identify ONE key preference. If a clear, long-term preference is stated or strongly implied, describe it in a short, simple sentence. If no clear preference is found, output the word "None".
+
+    Conversation:
+    {history_str}
+
+    Identified Preference:
+    """
+    try:
+        response = call_llm(prompt, UTILITY_API_KEY, UTILITY_MODEL, stream=False)
+        preference = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+        if preference.lower() != 'none' and preference != '':
+            User = Query()
+            existing_prefs = get_user_preferences(user_id)
+            if preference not in existing_prefs:
+                existing_prefs.append(preference)
+                USER_DB.upsert({'user_id': user_id, 'preferences': existing_prefs}, User.user_id == user_id)
+                print(f"Saved new preference for user {user_id}: {preference}")
+                return preference
+    except Exception as e:
+        print(f"Error extracting/saving user preferences: {e}")
+    return None
 
 # ==============================================================================
 # STREAMING EDGE-TTS API ENDPOINT
@@ -106,6 +172,9 @@ def search():
         if image_data: user_query = "Describe this image."
         elif file_data: user_query = f"Summarize this file: {file_name}"
 
+    user = session.get('user')
+    user_preferences = get_user_preferences(user['id']) if user else []
+
     active_persona_name = get_persona_prompt_name(persona_key, custom_persona_text)
     if is_god_mode and persona_key != 'god':
         active_persona_name = get_persona_prompt_name('god', '')
@@ -157,9 +226,51 @@ def search():
     }
     pipeline_func = pipelines.get(query_profile_type, run_default_pipeline)
 
-    return Response(stream_with_context(pipeline_func(
-        user_query, active_persona_name, current_api_key, current_model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, image_data=image_data, file_data=file_data, file_name=file_name
-    )), mimetype='text/event-stream')
+    main_generator = pipeline_func(
+        user_query, active_persona_name, current_api_key, current_model_config,
+        chat_history, is_god_mode, query_profile_type, custom_persona_text,
+        persona_key, image_data=image_data, file_data=file_data, file_name=file_name,
+        user_preferences=user_preferences
+    )
+
+    def response_wrapper(generator):
+        final_data_packet = None
+        for chunk in generator:
+            if chunk.startswith('data: '):
+                try:
+                    data = json.loads(chunk[6:])
+                    if data.get('type') == 'final_response':
+                        final_data_packet = data['data']
+                        continue
+                except json.JSONDecodeError:
+                    pass
+            yield chunk
+        
+        if final_data_packet and chat_id and user:
+            user_id = user['id']
+            save_chat_message(user_id, chat_id, user_query, final_data_packet)
+            
+            conn = get_db_connection()
+            message_count = conn.execute('SELECT COUNT(id) FROM memory WHERE chat_id = ?', (chat_id,)).fetchone()[0]
+            conn.close()
+
+            if message_count == 1:
+                title = generate_chat_title(user_query, final_data_packet.get('content', ''))
+                if title:
+                    conn = get_db_connection()
+                    conn.execute('UPDATE chats SET title = ? WHERE id = ? AND user_id = ?', (title, chat_id, user_id))
+                    conn.commit()
+                    conn.close()
+                    yield yield_data('chat_title_generated', {'chat_id': chat_id, 'title': title})
+
+            full_history_for_pref = chat_history + [{'role': 'user', 'content': user_query}, {'role': 'assistant', 'content': final_data_packet.get('content', '')}]
+            saved_pref_text = extract_and_save_user_preferences(user_id, full_history_for_pref)
+            if saved_pref_text:
+                yield yield_data('preference_saved', {'preference': saved_pref_text})
+
+        yield 'data: [DONE]\n\n'
+
+    return Response(stream_with_context(response_wrapper(main_generator)), mimetype='text/event-stream')
 
 # ==============================================================================
 # FLASK ROUTING AND SERVER STARTUP
@@ -328,9 +439,7 @@ def transcribe_audio():
 # ==============================================================================
 # DISCOVER PAGE ROUTES
 # ==============================================================================
-# In app.py
-
-@app.route('/discover') # Use a clean URL without .html
+@app.route('/discover')
 def discover_page_route():
     return render_template('discover.html', categories=CATEGORIES)
 
@@ -401,30 +510,19 @@ def track_interaction():
     return jsonify({'status': 'ok'})
 
 # ==============================================================================
-# USER AUTHENTICATION ROUTES
+# USER AUTHENTICATION & CHAT MANAGEMENT ROUTES
 # ==============================================================================
-# In app.py
-from flask import session # Make sure 'session' is imported from flask
-
 @app.route('/login')
 def login():
     redirect_uri = url_for('oauth2callback', _external=True)
-    
-    # Generate and store the nonce in the session automatically
-    # by passing it to the authorize_redirect method.
     return oauth.google.authorize_redirect(redirect_uri)
     
 @app.route('/oauth2callback')
 def oauth2callback():
     token = oauth.google.authorize_access_token()
-    
-    # Retrieve the nonce from the session
-    nonce = session.get('nonce') # authlib stores it in the session
-    
-    # Pass the token AND the nonce to parse_id_token
+    nonce = session.get('nonce')
     user_info = oauth.google.parse_id_token(token, nonce=nonce)
     
-    # Store user info in session and DB
     conn = get_db_connection()
     user = conn.execute('SELECT * FROM users WHERE username = ?', (user_info['email'],)).fetchone()
     if user is None:
@@ -456,9 +554,24 @@ def profile():
 
 
 def get_db_connection():
+    import sqlite3
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
+
+def save_chat_message(user_id, chat_id, query, answer_data_json):
+    """Saves a user query and its corresponding bot answer to the memory table."""
+    try:
+        conn = get_db_connection()
+        conn.execute(
+            'INSERT INTO memory (user_id, chat_id, query, answer_data) VALUES (?, ?, ?, ?)',
+            (user_id, chat_id, query, json.dumps(answer_data_json))
+        )
+        conn.commit()
+        conn.close()
+        print(f"Successfully saved message for chat_id: {chat_id}")
+    except Exception as e:
+        print(f"Error saving chat message for chat_id {chat_id}: {e}")
 
 @app.route('/api/chats', methods=['GET'])
 def get_chats():
@@ -488,6 +601,45 @@ def create_chat():
     
     return jsonify({'id': new_chat_id, 'title': title})
 
+@app.route('/api/chats/<int:chat_id>', methods=['PUT'])
+def rename_chat(chat_id):
+    user = session.get('user')
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    new_title = request.json.get('title')
+    if not new_title:
+        return jsonify({"error": "New title is required"}), 400
+
+    conn = get_db_connection()
+    conn.execute('UPDATE chats SET title = ? WHERE id = ? AND user_id = ?', (new_title, chat_id, user['id']))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"success": True, "message": "Chat renamed."})
+
+@app.route('/api/chats/<int:chat_id>', methods=['DELETE'])
+def delete_chat(chat_id):
+    user = session.get('user')
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    conn = get_db_connection()
+    # Use a transaction
+    try:
+        conn.execute('DELETE FROM memory WHERE chat_id = ? AND user_id = ?', (chat_id, user['id']))
+        conn.execute('DELETE FROM chats WHERE id = ? AND user_id = ?', (chat_id, user['id']))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error deleting chat {chat_id}: {e}")
+        return jsonify({"error": "Database error during deletion."}), 500
+    finally:
+        conn.close()
+    
+    return jsonify({"success": True, "message": "Chat deleted."})
+
+
 @app.route('/api/chats/<int:chat_id>/history', methods=['GET'])
 def get_chat_history(chat_id):
     user = session.get('user')
@@ -495,21 +647,37 @@ def get_chat_history(chat_id):
         return jsonify({"error": "Unauthorized"}), 401
 
     conn = get_db_connection()
-    # Ensure the user owns this chat
     chat = conn.execute('SELECT * FROM chats WHERE id = ? AND user_id = ?', (chat_id, user['id'])).fetchone()
     if not chat:
         conn.close()
         return jsonify({"error": "Chat not found or access denied"}), 404
 
-    history = conn.execute('SELECT query, answer FROM memory WHERE chat_id = ? ORDER BY timestamp ASC', (chat_id,)).fetchall()
+    history = conn.execute('SELECT query, answer_data FROM memory WHERE chat_id = ? ORDER BY timestamp ASC', (chat_id,)).fetchall()
     conn.close()
     
-    # Format the history as a list of {'user': query, 'assistant': answer}
     formatted_history = []
     for record in history:
-        formatted_history.append({'role': 'user', 'parts': [record['query']]})
-        formatted_history.append({'role': 'model', 'parts': [record['answer']]})
-        
+        formatted_history.append({
+            'role': 'user',
+            'content': record['query']
+        })
+        try:
+            answer_json = json.loads(record['answer_data'])
+            formatted_history.append({
+                'role': 'assistant',
+                'content': answer_json.get('content', ''),
+                'artifacts': answer_json.get('artifacts', []),
+                'sources': answer_json.get('sources', []),
+                'suggestions': answer_json.get('suggestions', []),
+                'imageResults': answer_json.get('imageResults', []),
+                'videoResults': answer_json.get('videoResults', [])
+            })
+        except (json.JSONDecodeError, TypeError):
+            formatted_history.append({
+                'role': 'assistant',
+                'content': 'Error: Could not decode message content.'
+            })
+            
     return jsonify(formatted_history)
 
 def init_db():
@@ -531,11 +699,12 @@ if __name__ == '__main__':
     from tools import get_current_datetime_str
     init_db()
 
-    print(f"🚀 SKYTH ENGINE v9.1 (Robust Deep Research Visuals) - Running with current date: {get_current_datetime_str()}")
+    print(f"🚀 SKYTH ENGINE v9.2 (Personalized Multi-Chat) - Running with current date: {get_current_datetime_str()}")
     print(f"   Conversational Model: {CONVERSATIONAL_MODEL}")
     print(f"   Reasoning Model: {REASONING_MODEL} (Reserved for Coding & Deep Research)")
     print(f"   Visualization Model: {VISUALIZATION_MODEL}")
+    print(f"   Utility Model: {UTILITY_MODEL} (For Titles & Preferences)")
     print(f"   Image Generation/Editing Model: {os.getenv('IMAGE_GENERATION_MODEL', 'gemini-2.0-flash-preview-image-generation')}")
-    print("   Features: Universal multi-step research planner. LLM-powered academic intent analysis. Auto-visualization & table generation. Robust HTML generation with image fallback.")
+    print("   Features: Multi-chat support, AI-generated titles, cross-chat memory & preference saving, chat management (rename/delete).")
     print("🌐 Server running on http://127.0.0.1:5000")
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
