@@ -1,3 +1,8 @@
 .env
-__pycache__
-flask_session
+__pycache__/
+*.pyc
+memory.db
+flask_session/
+*.sqlite3
+*.log
+*.db
