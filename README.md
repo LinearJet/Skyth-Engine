@@ -75,7 +75,7 @@ Follow these steps to get your own instance of the SKYTH Engine running locally.
 1.  **Clone the Repository:**
     ```bash
     git clone https://github.com/LinearJet/Skyth-Engine.git
-    && cd Skyth-Engine
+    cd Skyth-Engine
     ```
 
 2.  **Set Up a Virtual Environment (Recommended):**
