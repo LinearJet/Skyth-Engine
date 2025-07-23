@@ -49,7 +49,6 @@
         #prompt-input, #artifact-code-block, input, textarea, code.hljs {
             user-select: text;
         }
-        /* FIX: Apply user-select to all children of the selectable message */
         .chat-message.text-selectable, .chat-message.text-selectable * {
             user-select: text;
         }
@@ -135,10 +134,21 @@
         
         #chat-area { flex-grow: 1; overflow-y: auto; padding: 10px 20px 150px; display: flex; flex-direction: column; min-height: 0; gap: 12px; }
         
-        .chat-message { max-width: 85%; line-height: 1.6; word-wrap: break-word; position: relative; }
+        .chat-message {
+            max-width: 85%;
+            line-height: 1.6;
+            position: relative;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
         @media (min-width: 768px) { .chat-message { max-width: 80%; } }
         .user-message { align-self: flex-end; background-color: var(--button-bg); color: var(--primary-text-color); padding: 12px 18px; border-radius: 20px; border-bottom-right-radius: 5px; }
-        .bot-message { align-self: stretch; max-width: 100%; padding: 10px 0; }
+        .bot-message {
+            align-self: flex-start;
+            max-width: 100%;
+            padding: 10px 0;
+            min-width: 0;
+        }
         .bot-message-content { 
             display: flex; flex-direction: column; gap: 10px;
             min-width: 0; 
@@ -184,17 +194,42 @@
             border-radius: 12px; padding: 10px 12px; 
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             overflow: hidden;
+            /* FIX: Hard constraint to prevent long content from breaking layout */
+            display: table;
+            table-layout: fixed;
+            width: 100%;
         }
-        .artifact-thumbnail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-        /* FIX: Prevent long artifact titles from breaking the UI */
-        .artifact-thumbnail-header span { font-weight: bold; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .artifact-thumbnail-header i { color: var(--secondary-text-color); flex-shrink: 0; margin-left: 8px; }
-        .artifact-thumbnail-code { font-family: 'Courier New', Courier, monospace; font-size: 10px; color: #9e9e9e; white-space: pre; overflow: hidden; text-overflow: ellipsis; max-height: 40px; line-height: 1.4; }
+        .artifact-thumbnail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 8px; }
+        .artifact-thumbnail-header span {
+            font-weight: bold;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }
+        .artifact-thumbnail-header i { color: var(--secondary-text-color); flex-shrink: 0; }
+        .artifact-thumbnail-code {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 10px;
+            color: #9e9e9e;
+            white-space: pre; /* Keep preview on one line */
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-height: 40px;
+            line-height: 1.4;
+        }
         
         #artifact-viewer { position: fixed; top: 0; right: 0; width: 45%; height: 100%; background-color: rgba(20, 20, 20, 0.8); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border-left: 1px solid var(--border-color); z-index: 2000; transform: translateX(100%); transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94); display: flex; flex-direction: column; }
         #artifact-viewer.visible { transform: translateX(0); }
         #artifact-viewer-header { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; border-bottom: 1px solid var(--border-color); gap: 15px;}
-        #artifact-viewer-title { font-size: 18px; font-weight: 600; margin-right: auto; }
+        #artifact-viewer-title {
+            font-size: 18px; font-weight: 600; margin-right: auto;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }
         #artifact-viewer-controls { display: flex; align-items: center; gap: 8px; }
         #artifact-view-toggles { display: none; background-color: var(--button-bg); border-radius: 8px; padding: 4px; }
         .artifact-view-toggle { background: none; border: none; color: var(--secondary-text-color); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; transition: background-color 0.2s, color 0.2s; }
@@ -203,7 +238,14 @@
         .artifact-viewer-button:hover { color: var(--primary-text-color); }
         #artifact-viewer-content { flex-grow: 1; overflow: auto; background-color: var(--bg-color); }
         #artifact-viewer-content pre { margin: 0; height: 100%; }
-        #artifact-viewer-content pre code.hljs { background: transparent; padding: 20px; font-size: 14px; line-height: 1.6; height: 100%; }
+        #artifact-viewer-content pre code.hljs {
+            background: transparent;
+            padding: 20px;
+            font-size: 14px;
+            line-height: 1.6;
+            height: 100%;
+            /* FIX: Removed wrapping to allow horizontal scrolling for real code */
+        }
         #artifact-iframe { width: 100%; height: 100%; border: none; background-color: #fff; }
 
         .message-pills-container { margin-top: 12px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px; }
@@ -563,15 +605,23 @@ document.addEventListener('DOMContentLoaded', () => {
         closeAllMenus(); 
         if (!contextMenu.contains(e.target)) { hideContextMenu(); }
         if (!sidebarContextMenu.contains(e.target)) { hideSidebarContextMenu(); }
-        // FIX: Only deselect text if the click is outside the selected message
+        
         if (contextTargetElement && !contextTargetElement.contains(e.target) && !contextMenu.contains(e.target)) {
             contextTargetElement.classList.remove('text-selectable');
-            contextTargetElement = null;
         }
     });
 
     artifactViewerCloseBtn.addEventListener('click', hideArtifact);
-    artifactViewerCopyBtn.addEventListener('click', () => { if (currentArtifact.code) { navigator.clipboard.writeText(currentArtifact.code).then(() => { artifactViewerCopyBtn.className = 'fa-solid fa-check artifact-viewer-button'; setTimeout(() => { artifactViewerCopyBtn.className = 'fa-regular fa-copy artifact-viewer-button'; }, 1500); }); } });
+    artifactViewerCopyBtn.addEventListener('click', () => {
+        if (currentArtifact.content) {
+            navigator.clipboard.writeText(currentArtifact.content).then(() => {
+                artifactViewerCopyBtn.className = 'fa-solid fa-check artifact-viewer-button';
+                setTimeout(() => {
+                    artifactViewerCopyBtn.className = 'fa-regular fa-copy artifact-viewer-button';
+                }, 1500);
+            });
+        }
+    });
     interactiveViewBtn.addEventListener('click', () => setArtifactViewMode('interactive'));
     codeViewBtn.addEventListener('click', () => setArtifactViewMode('code'));
     mediaViewerClose.addEventListener('click', hideMediaViewer);
@@ -584,7 +634,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const targetMessage = e.target.closest('.chat-message');
         if (!targetMessage) return;
 
-        // If another message was already selected for text, deselect it.
         if (contextTargetElement && contextTargetElement !== targetMessage) {
             contextTargetElement.classList.remove('text-selectable');
         }
@@ -602,11 +651,11 @@ document.addEventListener('DOMContentLoaded', () => {
     chatArea.addEventListener('touchend', () => clearTimeout(longPressTimer));
     chatArea.addEventListener('touchmove', () => clearTimeout(longPressTimer));
     
-    document.getElementById('context-copy').addEventListener('click', () => { if (contextTargetElement) { navigator.clipboard.writeText(contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText); } hideContextMenu(); });
-    document.getElementById('context-select').addEventListener('click', () => { if (contextTargetElement) { contextTargetElement.classList.add('text-selectable'); } hideContextMenu(); });
-    document.getElementById('context-read-aloud').addEventListener('click', e => { if (contextTargetElement) { const textToRead = contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText; readAloud(textToRead, e.currentTarget); } hideContextMenu(); });
-    document.getElementById('context-image-search').addEventListener('click', () => { if (contextTargetElement) { const text = contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText; promptInput.value = `images of ${text}`; handleSendMessage(); } hideContextMenu(); });
-    document.getElementById('context-video-search').addEventListener('click', () => { if (contextTargetElement) { const text = contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText; promptInput.value = `video of ${text}`; handleSendMessage(); } hideContextMenu(); });
+    document.getElementById('context-copy').addEventListener('click', e => { e.stopPropagation(); if (contextTargetElement) { navigator.clipboard.writeText(contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText); } hideContextMenu(); });
+    document.getElementById('context-select').addEventListener('click', e => { e.stopPropagation(); if (contextTargetElement) { contextTargetElement.classList.add('text-selectable'); } hideContextMenu(); });
+    document.getElementById('context-read-aloud').addEventListener('click', e => { e.stopPropagation(); if (contextTargetElement) { const textToRead = contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText; readAloud(textToRead, e.currentTarget); } hideContextMenu(); });
+    document.getElementById('context-image-search').addEventListener('click', e => { e.stopPropagation(); if (contextTargetElement) { const text = contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText; promptInput.value = `images of ${text}`; handleSendMessage(); } hideContextMenu(); });
+    document.getElementById('context-video-search').addEventListener('click', e => { e.stopPropagation(); if (contextTargetElement) { const text = contextTargetElement.dataset.rawMarkdown || contextTargetElement.innerText; promptInput.value = `video of ${text}`; handleSendMessage(); } hideContextMenu(); });
 
     // --- CORE LOGIC ---
     async function handleSendMessage() {
@@ -978,6 +1027,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setArtifactViewMode('interactive');
             artifactViewToggles.style.display = 'none';
         } else if (type === 'html') {
+            artifactCodeBlock.className = 'language-html'; // FIX: Explicitly set language for highlighting
             artifactCodeBlock.textContent = content;
             hljs.highlightElement(artifactCodeBlock);
             artifactIframe.srcdoc = content;
@@ -1212,20 +1262,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (chat.id === state.currentChatId) {
                         a.classList.add('active');
                     }
-                    // FIX: Reworked chat switching logic for reliability
+                    
                     a.addEventListener('click', (e) => {
                         e.preventDefault();
                         if (isRenaming) return;
                         const newChatId = parseInt(a.dataset.chatId);
                         if (state.currentChatId === newChatId) return;
 
-                        // 1. Instant UI feedback
                         document.querySelector('#convo-history a.active')?.classList.remove('active');
                         a.classList.add('active');
                         showChatAreaLoader();
                         window.history.pushState({}, '', `/?chat_id=${newChatId}`);
                         
-                        // 2. Load the chat content
                         loadChat(newChatId);
                     });
                     
@@ -1295,63 +1343,64 @@ document.addEventListener('DOMContentLoaded', () => {
         if (menuRect.bottom > window.innerHeight) { sidebarContextMenu.style.top = `${window.innerHeight - menuRect.height - 5}px`; }
     }
     function hideSidebarContextMenu() { sidebarContextMenu.classList.remove('visible'); }
-    document.getElementById('context-rename').addEventListener('click', handleRenameClick);
-    document.getElementById('context-delete').addEventListener('click', handleDeleteClick);
+    document.getElementById('context-rename').addEventListener('click', (e) => { e.stopPropagation(); handleRenameClick(); });
+    document.getElementById('context-delete').addEventListener('click', (e) => { e.stopPropagation(); handleDeleteClick(); });
 
     function handleRenameClick() {
-        if (!sidebarContextTargetElement) return;
+        if (!sidebarContextTargetElement || isRenaming) return;
         const anchor = sidebarContextTargetElement;
         const li = anchor.parentElement;
         hideSidebarContextMenu();
         isRenaming = true;
 
+        const originalTitle = anchor.textContent;
         const input = document.createElement('input');
         input.type = 'text';
-        input.value = anchor.textContent;
+        input.value = originalTitle;
         Object.assign(input.style, {
             width: '100%', padding: '10px', boxSizing: 'border-box',
             border: '1px solid var(--accent-color)', borderRadius: '6px',
             backgroundColor: 'var(--input-bg)', color: 'var(--primary-text-color)',
-            outline: 'none', fontFamily: 'var(--font-family)', fontSize: '16px'
+            outline: 'none', fontFamily: 'var(--font-family)', fontSize: 'inherit'
         });
 
         li.replaceChild(input, anchor);
         input.focus(); input.select();
 
-        const finishEditing = async () => {
+        const finishEditing = async (save = true) => {
+            if (!isRenaming) return;
             isRenaming = false;
+            
             const newTitle = input.value.trim();
-            const originalTitle = anchor.textContent;
             const chatId = anchor.dataset.chatId;
 
-            // Revert to input temporarily to avoid showing the old name
-            li.replaceChild(anchor, input); 
+            if (!save || !newTitle || newTitle === originalTitle) {
+                anchor.textContent = originalTitle;
+                li.replaceChild(anchor, input);
+                return;
+            }
 
-            if (newTitle && newTitle !== originalTitle) {
-                try {
-                    const response = await fetch(`/api/chats/${chatId}`, {
-                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ title: newTitle })
-                    });
-                    if (!response.ok) throw new Error('Failed to rename chat.');
-                    // FIX: Re-fetch the entire list to ensure UI consistency
-                    await loadChatList();
-                } catch (error) { 
-                    console.error('Rename failed:', error);
-                    alert('Failed to rename chat.');
-                    await loadChatList(); // Reload to show original state
-                }
+            // Optimistic UI update
+            anchor.textContent = newTitle;
+            li.replaceChild(anchor, input);
+
+            try {
+                const response = await fetch(`/api/chats/${chatId}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: newTitle })
+                });
+                if (!response.ok) throw new Error('Failed to save the new title.');
+            } catch (error) { 
+                console.error('Rename failed:', error);
+                alert('Failed to rename chat.');
+                anchor.textContent = originalTitle;
             }
         };
 
-        input.addEventListener('blur', finishEditing);
+        input.addEventListener('blur', () => finishEditing(true));
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') input.blur();
-            if (e.key === 'Escape') {
-                isRenaming = false;
-                input.removeEventListener('blur', finishEditing);
-                li.replaceChild(anchor, input);
-            }
+            if (e.key === 'Enter') finishEditing(true);
+            if (e.key === 'Escape') finishEditing(false);
         });
     }
 
