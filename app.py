@@ -7,6 +7,7 @@ import time
 import random
 import traceback
 import requests # Import requests for exception handling
+import shutil # For backing up the database
 
 from flask import request, Response, stream_with_context, send_from_directory, render_template, jsonify, session, url_for, redirect
 from flask_cors import CORS
@@ -30,7 +31,6 @@ from pipelines import (
 )
 from academic import run_academic_pipeline
 from coding import run_coding_pipeline
-from god_mode import run_god_mode_reasoning
 from default import run_default_pipeline
 from unhinged import run_unhinged_pipeline
 from custom import run_custom_pipeline
@@ -118,7 +118,6 @@ def search(): # This is now a REGULAR function, not a generator
     user_query = data.get('query')
     persona_key = data.get('persona', 'default')
     custom_persona_text = data.get('custom_persona_prompt', '')
-    is_god_mode = data.get('is_god_mode', False)
     image_data = data.get('image_data')
     file_data = data.get('file_data')
     file_name = data.get('file_name')
@@ -133,6 +132,51 @@ def search(): # This is now a REGULAR function, not a generator
     user = session.get('user')
     user_id = user['id'] if user else 0
 
+    # --- NEW CONTEXT PERSISTENCE LOGIC ---
+    # This logic ensures that an uploaded file or image persists for the entire chat.
+    if chat_id and user:
+        conn = get_db_connection()
+        try:
+            # If new data is uploaded, it replaces any old resource for this chat.
+            if image_data or file_data:
+                conn.execute('DELETE FROM resource_memory WHERE chat_id = ? AND user_id = ?', (chat_id, user_id))
+                if image_data:
+                    conn.execute(
+                        'INSERT INTO resource_memory (user_id, chat_id, resource_type, content) VALUES (?, ?, ?, ?)',
+                        (user_id, chat_id, 'uploaded_image', image_data)
+                    )
+                    print(f"[Context] Saved image to resource memory for chat {chat_id}.")
+                elif file_data:
+                    file_content_json = json.dumps({'filename': file_name, 'b64data': file_data})
+                    conn.execute(
+                        'INSERT INTO resource_memory (user_id, chat_id, resource_type, content) VALUES (?, ?, ?, ?)',
+                        (user_id, chat_id, 'uploaded_file', file_content_json)
+                    )
+                    print(f"[Context] Saved file '{file_name}' to resource memory for chat {chat_id}.")
+                conn.commit()
+            # If no new data is uploaded, try to load an existing resource for the chat.
+            else:
+                resource = conn.execute(
+                    'SELECT resource_type, content FROM resource_memory WHERE chat_id = ? AND user_id = ? LIMIT 1',
+                    (chat_id, user_id)
+                ).fetchone()
+
+                if resource:
+                    if resource['resource_type'] == 'uploaded_image':
+                        image_data = resource['content']
+                        print(f"[Context] Loaded image from resource memory for chat {chat_id}.")
+                    elif resource['resource_type'] == 'uploaded_file':
+                        try:
+                            file_content = json.loads(resource['content'])
+                            file_data = file_content.get('b64data')
+                            file_name = file_content.get('filename')
+                            print(f"[Context] Loaded file '{file_name}' from resource memory for chat {chat_id}.")
+                        except (json.JSONDecodeError, TypeError):
+                            print(f"[Context] Error decoding file resource for chat {chat_id}.")
+        finally:
+            conn.close()
+    # --- END NEW CONTEXT PERSISTENCE LOGIC ---
+
     # --- NEW HISTORY FETCHING (No MemoryManager) ---
     chat_history = []
     if chat_id and user:
@@ -146,8 +190,6 @@ def search(): # This is now a REGULAR function, not a generator
     # --- END NEW HISTORY FETCHING ---
 
     active_persona_name = get_persona_prompt_name(persona_key, custom_persona_text)
-    if is_god_mode and persona_key != 'god':
-        active_persona_name = get_persona_prompt_name('god', '')
 
     if not CONVERSATIONAL_API_KEY:
         error_msg = "GEMINI_API_KEY not configured. This is required for all operations."
@@ -166,7 +208,7 @@ def search(): # This is now a REGULAR function, not a generator
         query_profile_type = route_decision.get("pipeline", "general_research")
         pipeline_params = route_decision.get("params", {})
 
-        print(f"Query: '{user_query}', Profiled as: {query_profile_type}, GodMode: {is_god_mode}, Params: {pipeline_params}")
+        print(f"Query: '{user_query}', Profiled as: {query_profile_type}, Params: {pipeline_params}")
 
         current_model_config = CONVERSATIONAL_MODEL
         current_api_key = CONVERSATIONAL_API_KEY
@@ -187,7 +229,6 @@ def search(): # This is now a REGULAR function, not a generator
             "html_preview": run_html_pipeline,
             "coding": run_coding_pipeline,
             "general_research": run_standard_research,
-            "god_mode_reasoning": run_god_mode_reasoning,
             "image_generation": run_image_generation_pipeline,
             "image_search": run_image_search_pipeline,
             "video_search": run_video_search_pipeline,
@@ -217,7 +258,7 @@ def search(): # This is now a REGULAR function, not a generator
         # The pipeline gets the past history, not including the current query
         main_generator = pipeline_func(
             final_query, active_persona_name, current_api_key, current_model_config,
-            chat_history, is_god_mode, query_profile_type, custom_persona_text,
+            chat_history, query_profile_type, custom_persona_text,
             persona_key, **pipeline_kwargs
         )
 
@@ -692,28 +733,62 @@ def get_chat_history(chat_id):
     return jsonify(formatted_history)
 
 def init_db():
+    """
+    Robust database initializer. Checks for schema validity and automatically
+    recreates the DB from schema.sql if it's outdated or missing.
+    """
     import sqlite3
-    if not os.path.exists(DATABASE):
-        print("Database not found. Initializing...")
+    
+    db_path = DATABASE
+    schema_path = 'schema.sql'
+
+    if not os.path.exists(schema_path):
+        print(f"❌ CRITICAL: {schema_path} not found. Cannot initialize or verify the database.")
+        return
+
+    schema_is_valid = False
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            # Check for the existence and structure of a critical table from the new schema
+            cursor.execute("PRAGMA table_info(resource_memory);")
+            columns = [row[1] for row in cursor.fetchall()]
+            # Check for specific columns that were added in the new schema
+            if 'content' in columns and 'resource_type' in columns:
+                schema_is_valid = True
+                print("✅ Database schema appears up-to-date.")
+            else:
+                 print("⚠️ Database schema is outdated (missing columns in 'resource_memory').")
+            conn.close()
+        except sqlite3.OperationalError:
+            # This happens if the table 'resource_memory' doesn't exist at all
+            print("⚠️ Database schema is outdated ('resource_memory' table is missing).")
+        except Exception as e:
+            print(f"❌ Error checking database schema: {e}")
     else:
-        print("Database found. Checking schema...")
+        print("Database not found. A new one will be created.")
+
+    if not schema_is_valid:
+        if os.path.exists(db_path):
+            backup_path = f"{db_path}.backup.{int(time.time())}"
+            print(f"Backing up existing database to {backup_path}...")
+            try:
+                shutil.move(db_path, backup_path)
+            except Exception as e:
+                print(f"❌ Could not back up database: {e}. Please check file permissions.")
+                return
         
-    try:
-        conn = sqlite3.connect(DATABASE)
-        # Check if a new table exists. If not, assume schema needs to be run.
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='episodic_memory';")
-        if cursor.fetchone() is None:
-            print("Old schema detected or new database. Initializing from schema.sql...")
-            with open('schema.sql', 'r') as f:
+        print(f"Initializing new database from {schema_path}...")
+        try:
+            conn = sqlite3.connect(db_path)
+            with open(schema_path, 'r') as f:
                 conn.executescript(f.read())
             conn.commit()
-            print("✅ Database initialized/updated successfully from schema.sql.")
-        else:
-            print("✅ Database schema appears up-to-date.")
-        conn.close()
-    except Exception as e:
-        print(f"❌ DB initialization error: {e}")
+            conn.close()
+            print("✅ New database initialized successfully.")
+        except Exception as e:
+            print(f"❌ DB initialization from schema failed: {e}")
 
 
 if __name__ == '__main__':
@@ -721,12 +796,12 @@ if __name__ == '__main__':
     from tools import get_current_datetime_str
     init_db()
 
-    print(f"🚀 SKYTH ENGINE v10.3 (Simplified Context Architecture) - Running with current date: {get_current_datetime_str()}")
+    print(f"🚀 SKYTH ENGINE v10.4 (Robust DB & Context) - Running with current date: {get_current_datetime_str()}")
     print(f"   Conversational Model: {CONVERSATIONAL_MODEL}")
     print(f"   Reasoning Model: {REASONING_MODEL} (Reserved for Coding & Deep Research)")
     print(f"   Visualization Model: {VISUALIZATION_MODEL}")
     print(f"   Utility/Routing Model: {UTILITY_MODEL}")
     print(f"   Image Generation/Editing Model: {os.getenv('IMAGE_GENERATION_MODEL', 'gemini-2.0-flash-preview-image-generation')}")
-    print("   Features: Simplified history management, LLM-based query routing, no keyword logic.")
+    print("   Features: Robust DB initialization, persistent file/image context, LLM-based query routing.")
     print("🌐 Server running on http://127.0.0.1:5000")
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))

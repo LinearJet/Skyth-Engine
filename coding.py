@@ -4,7 +4,7 @@ from config import VISUALIZATION_API_KEY, VISUALIZATION_MODEL, REASONING_API_KEY
 from tools import call_llm, _create_error_html_page
 from utils import yield_data, _stream_llm_response
 
-def run_coding_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, visual_output_required=False, **kwargs):
+def run_coding_pipeline(query, persona_name, api_key, model_config, chat_history, query_profile_type, custom_persona_text, persona_key, visual_output_required=False, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': f'Engaging model for coding task: "{query[:50]}..."'})
 

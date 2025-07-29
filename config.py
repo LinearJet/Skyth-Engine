@@ -68,7 +68,6 @@ EDGE_TTS_VOICE_MAPPING = {
     "academic": "en-US-AndrewMultilingualNeural",
     "coding": "en-US-BrianMultilingualNeural",
     "unhinged": "en-US-AndrewMultilingualNeural",
-    "god": "en-US-AndrewMultilingualNeural",
     "custom": "en-US-AvaMultilingualNeural"
 }
 

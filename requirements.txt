@@ -15,7 +15,9 @@ pydub
 pypdf
 python-dotenv
 requests
-selenium
+selenium==4.9.1
 tinydb
 trafilatura
 youtube-transcript-api
+yfinance
+google.genai

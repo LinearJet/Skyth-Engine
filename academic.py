@@ -11,7 +11,7 @@ from tools import (
 )
 from utils import yield_data, _stream_llm_response
 
-def run_academic_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+def run_academic_pipeline(query, persona_name, api_key, model_config, chat_history, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
     yield yield_data('step', {'status': 'thinking', 'text': 'Analyzing academic query intent...'})
     intent_analysis = analyze_academic_intent_with_llm(query, chat_history)

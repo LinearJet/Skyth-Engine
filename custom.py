@@ -1,6 +1,6 @@
 from pipelines import run_standard_research
 
-def run_custom_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
+def run_custom_pipeline(query, persona_name, api_key, model_config, chat_history, query_profile_type, custom_persona_text, persona_key, **kwargs):
     """
     The custom pipeline, which simply wraps the standard research pipeline.
     This can be expanded with more complex logic in the future.
@@ -11,7 +11,6 @@ def run_custom_pipeline(query, persona_name, api_key, model_config, chat_history
         api_key, 
         model_config, 
         chat_history, 
-        is_god_mode, 
         query_profile_type, 
         custom_persona_text, 
         persona_key, 

@@ -9,7 +9,6 @@ import io
 import uuid # For Pollinations seed
 import mimetypes
 import random # For Discover page content shuffling
-import subprocess # For running the Node.js stock script
 import html # For escaping HTML content
 from urllib.parse import quote, urlparse, urljoin, unquote # For various URL operations
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,6 +40,9 @@ from google import genai as google_genai
 from google.genai import types as google_types
 from PIL import Image as PIL_Image
 from io import BytesIO as IO_BytesIO
+import yfinance as yf
+import pandas as pd
+
 
 from config import (
     CACHE, CONTENT_CACHE_DURATION, SITE_PARSERS, GENERIC_SELECTORS,
@@ -903,7 +905,6 @@ def get_persona_prompt_name(persona_key, custom_persona_text):
             "I will be extremely sarcastic, use strong language, and might even roast the user or the subject of the query. "
             "Don't hold back, be brutally honest and irreverent. "
         ),
-        "god": "an omniscient AI with vast knowledge and visualization capabilities"
     }
     return personas_map.get(persona_key, personas_map["default"])
 
@@ -931,8 +932,6 @@ def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_
     ]
 
     # Handle preconditions that don't require an LLM for efficiency
-    if file_data:
-        return {"pipeline": "file_analysis", "params": {}}
     if persona_key == 'academic':
         return {"pipeline": "academic_pipeline", "params": {}}
     
@@ -954,6 +953,7 @@ You are an expert routing agent. Your task is to analyze the user's **current qu
 
 **Context:**
 - User has uploaded an image: {'Yes' if image_data else 'No'}
+- User has uploaded a file: {'Yes' if file_data else 'No'}
 - Current Persona: {persona_key}
 - Conversation History:
 {history_str}
@@ -962,8 +962,8 @@ You are an expert routing agent. Your task is to analyze the user's **current qu
 
 **Instructions:**
 1.  Analyze the user's **current query** to understand their immediate intent.
-2.  If the query contains a URL, use the appropriate URL parsing tool.
-3.  If the query is a follow-up question (e.g., "what about...", "tell me more"), use the history to understand the subject, but select a tool based on the *nature* of the follow-up. For example, a follow-up "and what are the risks?" after a research query should still be 'general_research'.
+2.  If the query is a direct request for a specific tool (e.g., "generate an image", "find pictures of"), choose that tool, even if a file or image is present in the context.
+3.  If the query is ambiguous but a file or image is in context, assume the query is about that file/image and choose the appropriate analysis tool.
 4.  Choose exactly one tool from the list.
 5.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the name of the chosen tool) and "params" (an object containing the required parameters).
 6.  If no specific parameters are needed, "params" should be an empty object {{}}.
@@ -991,38 +991,57 @@ You are an expert routing agent. Your task is to analyze the user's **current qu
 
 def get_stock_data(ticker, time_range='1mo'):
     """
-    Executes an external Node.js script to fetch stock data using yahoo-finance2.
+    Fetches historical stock data for a given ticker using the yfinance library.
+    This replaces the previous Node.js script dependency.
     """
-    script_path = 'fetch_stock_data.mjs'
-    if not os.path.exists(script_path):
-        print(f"CRITICAL ERROR: Stock script '{script_path}' not found.")
-        return {"error": "The stock data fetching script is missing on the server."}
-    
+    print(f"[yfinance] Fetching data for ticker: {ticker}, range: {time_range}")
     try:
-        process = subprocess.run(
-            ['node', script_path, ticker, time_range],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=20
-        )
-        return json.loads(process.stdout)
-    except FileNotFoundError:
-        print("CRITICAL ERROR: Node.js is not installed or not in the system's PATH.")
-        return {"error": "The server is missing a dependency (Node.js) required for stock data."}
-    except subprocess.CalledProcessError as e:
-        print(f"Error running stock script for {ticker}: {e.stderr}")
-        try:
-            error_json = json.loads(e.stderr)
-            return {"error": error_json.get("error", "An unknown error occurred in the stock script.")}
-        except json.JSONDecodeError:
-            return {"error": f"The stock script failed. It might be an invalid ticker: '{ticker}'."}
-    except subprocess.TimeoutExpired:
-        print(f"Timeout fetching stock data for {ticker}.")
-        return {"error": "The request for stock data timed out."}
+        stock = yf.Ticker(ticker)
+        
+        period_map = {
+            '1d': '1d', '5d': '5d', '1wk': '1wk', '1mo': '1mo',
+            '3mo': '3mo', '6mo': '6mo', 'ytd': 'ytd', '1y': '1y',
+            '5y': '5y', 'max': 'max'
+        }
+        period = period_map.get(time_range, '1mo')
+        
+        interval = '1h' if period == '1d' else '1d'
+
+        hist = stock.history(period=period, interval=interval)
+
+        if hist.empty:
+            # Fallback for crypto-like tickers (e.g., BTC -> BTC-USD)
+            if '-' not in ticker:
+                 print(f"[yfinance] No data for {ticker}, trying {ticker}-USD")
+                 hist = yf.Ticker(f"{ticker}-USD").history(period=period, interval=interval)
+            if hist.empty:
+                print(f"[yfinance] No data found for ticker: {ticker} (or fallback)")
+                return {"error": f"No historical data found for ticker '{ticker}'. It might be delisted or an invalid symbol."}
+
+        hist = hist.reset_index()
+        
+        date_col_name = next((col for col in ['Datetime', 'Date'] if col in hist.columns), None)
+        if not date_col_name:
+            raise ValueError("Date or Datetime column not found in yfinance history.")
+
+        hist.rename(columns={
+            date_col_name: 'date', 'Open': 'open', 'High': 'high',
+            'Low': 'low', 'Close': 'close', 'Volume': 'volume'
+        }, inplace=True)
+
+        hist['date'] = pd.to_datetime(hist['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        required_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+        result_df = hist[[col for col in required_cols if col in hist.columns]]
+
+        data = result_df.to_dict('records')
+        print(f"[yfinance] Successfully fetched {len(data)} data points for {ticker}.")
+        return data
+
     except Exception as e:
-        print(f"An unexpected error occurred while getting stock data: {e}")
-        return {"error": str(e)}
+        print(f"[yfinance] Error fetching data for {ticker}: {e}")
+        return {"error": f"An error occurred while fetching data for '{ticker}': {str(e)}"}
+
 
 def generate_stock_chart_html(ticker, stock_data, time_range='1mo'):
     """
