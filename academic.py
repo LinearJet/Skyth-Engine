@@ -13,7 +13,6 @@ from utils import yield_data, _stream_llm_response
 
 def run_academic_pipeline(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
-    llm_context = kwargs.get('llm_context', '')
     yield yield_data('step', {'status': 'thinking', 'text': 'Analyzing academic query intent...'})
     intent_analysis = analyze_academic_intent_with_llm(query, chat_history)
 
@@ -57,6 +56,8 @@ def run_academic_pipeline(query, persona_name, api_key, model_config, chat_histo
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing academic response...'})
 
     synthesis_prompt = f"""
+User's Query: "{query}"
+
 As an academic, your task is to provide a clear, academic explanation for the user's query.
 - Synthesize information from all relevant sources to build a coherent answer.
 - Explain the principles behind any visualization that was generated.
@@ -72,7 +73,7 @@ As an academic, your task is to provide a clear, academic explanation for the us
     stream_response = call_llm(
         synthesis_prompt, api_key, model_config, stream=True,
         chat_history=chat_history, persona_name=persona_name,
-        custom_persona_text=custom_persona_text, persona_key=persona_key, llm_context=llm_context
+        custom_persona_text=custom_persona_text, persona_key=persona_key
     )
     
     full_response_content = ""
@@ -83,4 +84,3 @@ As an academic, your task is to provide a clear, academic explanation for the us
     final_data['content'] = full_response_content
     yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Academic response complete.'})
-    

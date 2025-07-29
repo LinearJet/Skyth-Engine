@@ -6,3 +6,5 @@ flask_session/
 *.sqlite3
 *.log
 *.db
+*.json
+*.webmanifest

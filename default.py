@@ -17,4 +17,3 @@ def run_default_pipeline(query, persona_name, api_key, model_config, chat_histor
         persona_key, 
         **kwargs
     )
-    

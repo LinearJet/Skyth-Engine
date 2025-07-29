@@ -6,6 +6,7 @@ import mimetypes
 import time
 import random
 import traceback
+import requests # Import requests for exception handling
 
 from flask import request, Response, stream_with_context, send_from_directory, render_template, jsonify, session, url_for, redirect
 from flask_cors import CORS
@@ -33,7 +34,6 @@ from god_mode import run_god_mode_reasoning
 from default import run_default_pipeline
 from unhinged import run_unhinged_pipeline
 from custom import run_custom_pipeline
-from memory_system import MetaMemoryManager # New Import
 
 # Apply CORS to the app object from config
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -133,9 +133,17 @@ def search(): # This is now a REGULAR function, not a generator
     user = session.get('user')
     user_id = user['id'] if user else 0
 
-    memory_manager = MetaMemoryManager(user_id)
-    chat_history = memory_manager.episodic.get_chat_history(chat_id)
-    llm_context = memory_manager.retrieve_context_for_llm(user_query, chat_history)
+    # --- NEW HISTORY FETCHING (No MemoryManager) ---
+    chat_history = []
+    if chat_id and user:
+        conn = get_db_connection()
+        history_records = conn.execute(
+            "SELECT role, content FROM episodic_memory WHERE user_id = ? AND chat_id = ? ORDER BY timestamp ASC",
+            (user_id, chat_id)
+        ).fetchall()
+        conn.close()
+        chat_history = [{"role": row['role'], "content": row['content']} for row in history_records]
+    # --- END NEW HISTORY FETCHING ---
 
     active_persona_name = get_persona_prompt_name(persona_key, custom_persona_text)
     if is_god_mode and persona_key != 'god':
@@ -153,6 +161,7 @@ def search(): # This is now a REGULAR function, not a generator
         # This first yield is now safely inside the generator passed to the Response
         yield yield_data('step', {'status': 'routing', 'text': 'Analyzing query intent...'})
 
+        # The router gets the current query and the past history for context
         route_decision = route_query_to_pipeline(user_query, chat_history, image_data, file_data, persona_key)
         query_profile_type = route_decision.get("pipeline", "general_research")
         pipeline_params = route_decision.get("params", {})
@@ -197,7 +206,7 @@ def search(): # This is now a REGULAR function, not a generator
 
         pipeline_kwargs = {
             "image_data": image_data, "file_data": file_data, "file_name": file_name,
-            "llm_context": llm_context, **pipeline_params
+            **pipeline_params
         }
 
         # FIX 1: Handle query parameter conflict from router
@@ -205,6 +214,7 @@ def search(): # This is now a REGULAR function, not a generator
         # Then we remove it from kwargs to avoid the TypeError.
         final_query = pipeline_kwargs.pop('query', user_query)
 
+        # The pipeline gets the past history, not including the current query
         main_generator = pipeline_func(
             final_query, active_persona_name, current_api_key, current_model_config,
             chat_history, is_god_mode, query_profile_type, custom_persona_text,
@@ -222,11 +232,23 @@ def search(): # This is now a REGULAR function, not a generator
                             final_data_packet = chunk_data.get('data')
 
                             if final_data_packet and chat_id and user:
-                                saved_mems = memory_manager.analyze_and_save_turn(user_query, final_data_packet, chat_id)
-                                if saved_mems:
-                                    saved_core = [mem for mem in saved_mems if mem.startswith("core:")]
-                                    if saved_core:
-                                        yield yield_data('preference_saved', {'preference': saved_core[0].split("=")[1]})
+                                # --- NEW HISTORY SAVING LOGIC ---
+                                conn = get_db_connection()
+                                try:
+                                    # Save user message
+                                    conn.execute(
+                                        'INSERT INTO episodic_memory (user_id, chat_id, role, content) VALUES (?, ?, ?, ?)',
+                                        (user_id, chat_id, 'user', user_query)
+                                    )
+                                    # Save assistant message
+                                    conn.execute(
+                                        'INSERT INTO episodic_memory (user_id, chat_id, role, content, final_data_json) VALUES (?, ?, ?, ?, ?)',
+                                        (user_id, chat_id, 'assistant', final_data_packet.get('content', ''), json.dumps(final_data_packet))
+                                    )
+                                    conn.commit()
+                                finally:
+                                    conn.close()
+                                # --- END NEW LOGIC ---
 
                                 conn = get_db_connection()
                                 message_count = conn.execute('SELECT COUNT(id) FROM episodic_memory WHERE chat_id = ? AND user_id = ?', (chat_id, user_id)).fetchone()[0]
@@ -635,9 +657,11 @@ def get_chat_history(chat_id):
         conn.close()
         return jsonify({"error": "Chat not found or access denied"}), 404
 
-    # Use the new Episodic Memory to get history
-    memory_manager = MetaMemoryManager(user['id'])
-    history_records = memory_manager.episodic.get_raw_history(chat_id)
+    # Directly query episodic memory
+    history_records = conn.execute(
+        "SELECT role, content, final_data_json FROM episodic_memory WHERE chat_id = ? AND user_id = ? ORDER BY timestamp ASC",
+        (chat_id, user['id'])
+    ).fetchall()
     conn.close()
     
     formatted_history = []
@@ -697,12 +721,12 @@ if __name__ == '__main__':
     from tools import get_current_datetime_str
     init_db()
 
-    print(f"🚀 SKYTH ENGINE v10.2 (Agentic Memory Architecture) - Running with current date: {get_current_datetime_str()}")
+    print(f"🚀 SKYTH ENGINE v10.3 (Simplified Context Architecture) - Running with current date: {get_current_datetime_str()}")
     print(f"   Conversational Model: {CONVERSATIONAL_MODEL}")
     print(f"   Reasoning Model: {REASONING_MODEL} (Reserved for Coding & Deep Research)")
     print(f"   Visualization Model: {VISUALIZATION_MODEL}")
     print(f"   Utility/Routing Model: {UTILITY_MODEL}")
     print(f"   Image Generation/Editing Model: {os.getenv('IMAGE_GENERATION_MODEL', 'gemini-2.0-flash-preview-image-generation')}")
-    print("   Features: Agentic multi-component memory, LLM-based query routing, no keyword logic.")
+    print("   Features: Simplified history management, LLM-based query routing, no keyword logic.")
     print("🌐 Server running on http://127.0.0.1:5000")
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))

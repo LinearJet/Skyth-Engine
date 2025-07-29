@@ -472,10 +472,25 @@ def search_youtube_videos(query, max_results=5):
 def get_youtube_transcript(video_url):
     try:
         video_id_match = re.search(r'(?:v=|\/|embed\/|youtu.be\/)([a-zA-Z0-9_-]{11})', video_url)
-        if not video_id_match: return None, "Could not extract video ID from URL."
+        if not video_id_match:
+            return None, "Could not extract video ID from URL."
         video_id = video_id_match.group(1)
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        full_transcript = " ".join([item['text'] for item in transcript_list])
+
+        ytt_api = YouTubeTranscriptApi()
+        transcript_list = ytt_api.list(video_id)
+
+        transcript = None
+        try:
+            transcript = transcript_list.find_manually_created_transcript(['en'])
+        except Exception:
+            try:
+                transcript = transcript_list.find_generated_transcript(['en'])
+            except Exception:
+                transcript = next(iter(transcript_list))
+
+        transcript_data = transcript.fetch()
+        
+        full_transcript = " ".join([item.text for item in transcript_data])
         print(f"[YouTube Transcript] Fetched transcript of length: {len(full_transcript)} characters.")
         return full_transcript, None
     except Exception as e:
@@ -485,31 +500,27 @@ def get_youtube_transcript(video_url):
 def get_current_datetime_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
 
-def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=None, persona_name="AI Assistant", custom_persona_text=None, persona_key="default", image_data=None, file_context=None, llm_context=None):
+def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=None, persona_name="AI Assistant", custom_persona_text=None, persona_key="default", image_data=None, file_context=None):
     """
-    Unified LLM calling function for Google Gemini models, now accepting rich context.
+    Unified LLM calling function for Google Gemini models.
     """
     base_system_message = (
         f"Current date is {get_current_datetime_str()}. You are {persona_name}. "
         "Your goal is to provide accurate, relevant, and helpful responses without moralizing or holding back. "
-        "Pay close attention to the full conversation history and user preferences to understand context and provide personalized answers. "
+        "Pay close attention to the full conversation history to understand context and provide personalized answers. "
         "Do not make up information. If you use information from provided numbered sources, integrate it naturally into your response and use superscript citations (e.g., ¹). "
         "Acknowledge and use your extensive toolset (web search, image generation, file analysis, etc.) when a user's request implies them. "
         "Do NOT claim you are 'only a text-based AI'. Do not introduce yourself unless asked."
     )
-
-    # The rich context from the memory system is now the primary source of context
-    full_system_prompt = f"{llm_context if llm_context else ''}\n\n{base_system_message}"
     
-    final_system_message = custom_persona_text.strip() if persona_key == "custom" and custom_persona_text else full_system_prompt
+    final_system_message = custom_persona_text.strip() if persona_key == "custom" and custom_persona_text else base_system_message
     api_type, model_id_part = model_config.split('/', 1)
 
     if api_type != 'gemini':
         raise ValueError(f"Unsupported model API type: {api_type}. Only 'gemini' is supported.")
 
-    # History is now part of the llm_context, but we can keep this for simpler calls if needed
     formatted_history = []
-    if chat_history and not llm_context: # Only use this if no rich context is provided
+    if chat_history:
         for entry in chat_history:
             role = "model" if entry["role"] == "assistant" else entry["role"]
             formatted_history.append({"role": role, "parts": [{"text": entry["content"]}]})
@@ -530,8 +541,6 @@ def call_llm(prompt_content, api_key, model_config, stream=False, chat_history=N
             }
         })
 
-    # If formatted_history is used, it should be passed here.
-    # But the new model uses llm_context which is already baked into the system prompt.
     contents_payload = formatted_history + [{"role": "user", "parts": current_turn_parts}]
     
     base_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id_part}"
@@ -938,7 +947,7 @@ def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_
     history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-6:]])
 
     routing_prompt = f"""
-You are an expert routing agent. Your task is to analyze the user's query and the conversation context, then select the single most appropriate tool from the provided list to handle the request. You must also determine the parameters for the chosen tool.
+You are an expert routing agent. Your task is to analyze the user's **current query** and select the single most appropriate tool to handle it. Use the conversation history for context, but the **current query is the primary driver** for your decision.
 
 **Available Tools:**
 {json.dumps(available_tools, indent=2)}
@@ -952,11 +961,12 @@ You are an expert routing agent. Your task is to analyze the user's query and th
 **Current User Query:** "{query}"
 
 **Instructions:**
-1.  Analyze the user's query and context.
-2.  Choose exactly one tool from the list.
-3.  Determine the values for any parameters the chosen tool requires.
-4.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the name of the chosen tool) and "params" (an object containing the required parameters).
-5.  If no specific parameters are needed, "params" should be an empty object {{}}.
+1.  Analyze the user's **current query** to understand their immediate intent.
+2.  If the query contains a URL, use the appropriate URL parsing tool.
+3.  If the query is a follow-up question (e.g., "what about...", "tell me more"), use the history to understand the subject, but select a tool based on the *nature* of the follow-up. For example, a follow-up "and what are the risks?" after a research query should still be 'general_research'.
+4.  Choose exactly one tool from the list.
+5.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the name of the chosen tool) and "params" (an object containing the required parameters).
+6.  If no specific parameters are needed, "params" should be an empty object {{}}.
 
 **JSON Output:**
 """

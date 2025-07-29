@@ -18,7 +18,6 @@ from utils import yield_data, _stream_llm_response
 
 def run_god_mode_reasoning(query, persona_name, api_key, model_config, chat_history, is_god_mode, query_profile_type_main, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
-    llm_context = kwargs.get('llm_context', '')
     current_model_config = CONVERSATIONAL_MODEL
     current_api_key = CONVERSATIONAL_API_KEY
     yield yield_data('step', {'status': 'thinking', 'text': 'God Mode: Engaging advanced reasoning...'})
@@ -55,8 +54,13 @@ def run_god_mode_reasoning(query, persona_name, api_key, model_config, chat_hist
             final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing comprehensive answer...'})
-    main_answer_prompt = f"As an omniscient AI, synthesize ALL your knowledge and CRITICALLY ANALYZE and INTEGRATE the provided research data to give a comprehensive, direct, and insightful answer. Prioritize factual accuracy from the provided data. If information is not explicitly available in the provided data, state that you don't have that specific information, rather than fabricating it. Integrate source information naturally, citing with superscripts (e.g., ¹) if specific facts are used. Do not state 'Source X says...'.\n\nResearch Data:\n{context_for_llm if unique_snippets else 'No specific research data. Rely on your internal knowledge, but be cautious of hallucination and state limitations clearly.'}"
-    stream_response = call_llm(main_answer_prompt, current_api_key, current_model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key, llm_context=llm_context)
+    main_answer_prompt = f"""The user's current query is: "{query}"
+
+As an omniscient AI, synthesize ALL your knowledge and CRITICALLY ANALYZE and INTEGRATE the provided research data to give a comprehensive, direct, and insightful answer. Prioritize factual accuracy from the provided data. If information is not explicitly available in the provided data, state that you don't have that specific information, rather than fabricating it. Integrate source information naturally, citing with superscripts (e.g., ¹) if specific facts are used. Do not state 'Source X says...'.
+
+Research Data:
+{context_for_llm if unique_snippets else 'No specific research data. Rely on your internal knowledge, but be cautious of hallucination and state limitations clearly.'}"""
+    stream_response = call_llm(main_answer_prompt, current_api_key, current_model_config, stream=True, chat_history=chat_history, persona_name=persona_name, custom_persona_text=custom_persona_text, persona_key=persona_key)
     
     full_response_content = ""
     for chunk in _stream_llm_response(stream_response, current_model_config):
