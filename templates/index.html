@@ -16,8 +16,20 @@
     <!-- MathJax for Math Rendering -->
     <script>
         MathJax = {
-          tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
-          chtml: { fontfamily: 'TeX' }
+          tex: {
+            inlineMath: [['\\(', '\\)']],
+            displayMath: [['$$', '$$'], ['\\[', '\\]']],
+            processEscapes: true
+          },
+          chtml: { fontfamily: 'TeX' },
+          startup: {
+            ready: () => {
+              MathJax.startup.defaultReady();
+              MathJax.startup.promise.then(() => {
+                console.log('MathJax initial typeset complete');
+              });
+            }
+          }
         };
     </script>
     <script type="text/javascript" id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
@@ -376,7 +388,7 @@
                         </div>
                         <input type="file" id="image-upload-input" accept="image/*">
                         <input type="file" id="file-upload-input">
-                        <div class="collapsible-menu-container"><button id="deep-search-button" class="input-button"><i class="fa-solid fa-magnifying-glass-chart"></i></button><div id="deep-search-menu" class="collapsible-menu"><div class="menu-item" data-search-mode="deep_research">Deep Research</div><div class="menu-item" data-search-mode="god_mode_reasoning">God Mode</div><div class="menu-item" data-search-mode="none">Off</div></div></div>
+                        <div class="collapsible-menu-container"><button id="deep-search-button" class="input-button"><i class="fa-solid fa-magnifying-glass-chart"></i></button><div id="deep-search-menu" class="collapsible-menu"><div class="menu-item" data-search-mode="deep_research">Deep Research</div><div class="menu-item" data-search-mode="agent">Agent Mode</div><div class="menu-item" data-search-mode="none">Off</div></div></div>
                         <div class="collapsible-menu-container">
                             <button id="persona-selector-button" class="input-button" title="Select Persona"><i class="fa-solid fa-masks-theater"></i></button>
                             <div id="persona-menu" class="collapsible-menu">
@@ -442,7 +454,8 @@ document.addEventListener('DOMContentLoaded', () => {
         attachedImageData: null,
         attachedFileData: null,
         attachedFileName: null,
-        currentChatId: null
+        currentChatId: null,
+        currentQueryProfile: null
     };
     let currentArtifact = { code: null, type: null, title: null };
     let chatHistory = [];
@@ -693,7 +706,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const payload = {
             query: prompt,
             persona: state.currentPersona,
-            is_god_mode: state.deepSearchMode === 'god_mode_reasoning',
+            model: state.model,
+            deep_search_mode: state.deepSearchMode,
             history: chatHistory.slice(-10),
             image_data: state.attachedImageData,
             file_data: state.attachedFileData,
@@ -744,6 +758,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         switch (json.type) {
                             case 'step': animator.update(json.data.text); break;
+                            case 'query_profile': state.currentQueryProfile = json.data.type; break;
                             case 'answer_chunk':
                                 botMessageData.content += json.data;
                                 streamingTextElement.innerHTML = marked.parse(botMessageData.content, { gfm: true, breaks: true }) + '<span class="streaming-cursor"></span>';
@@ -773,7 +788,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             case 'video_search_results': botMessageData.videoResults = json.data; break;
                             case 'final_response':
                                 const finalData = json.data;
-                                Object.assign(botMessageData, finalData);
+                                // FIX: Merge final data without overwriting existing arrays like suggestions
+                                botMessageData.content = finalData.content || botMessageData.content;
+                                if (finalData.artifacts) botMessageData.artifacts = [...botMessageData.artifacts, ...finalData.artifacts];
+                                if (finalData.sources) botMessageData.sources = finalData.sources;
+                                if (finalData.imageResults) botMessageData.imageResults = finalData.imageResults;
+                                if (finalData.videoResults) botMessageData.videoResults = finalData.videoResults;
+                                // Importantly, do NOT overwrite suggestions if they already exist.
+                                if (finalData.suggestions && botMessageData.suggestions.length === 0) {
+                                    botMessageData.suggestions = finalData.suggestions;
+                                }
                                 break;
                         }
                         if (wasAtBottom) scrollToBottom();
@@ -831,7 +855,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        if (window.MathJax && MathJax.typesetPromise) {
+        if (window.MathJax && MathJax.typesetPromise && state.currentQueryProfile !== 'stock_query') {
             MathJax.typesetPromise([textElement]).catch(console.error);
         }
         

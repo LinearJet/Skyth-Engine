@@ -34,6 +34,7 @@ from coding import run_coding_pipeline
 from default import run_default_pipeline
 from unhinged import run_unhinged_pipeline
 from custom import run_custom_pipeline
+from tools_plugins.web_search_tool import WebSearchTool
 
 # Apply CORS to the app object from config
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -117,6 +118,8 @@ def search(): # This is now a REGULAR function, not a generator
     data = request.json
     user_query = data.get('query')
     persona_key = data.get('persona', 'default')
+    model = data.get('model')
+    deep_search_mode = data.get('deep_search_mode', 'none')
     custom_persona_text = data.get('custom_persona_prompt', '')
     image_data = data.get('image_data')
     file_data = data.get('file_data')
@@ -204,20 +207,22 @@ def search(): # This is now a REGULAR function, not a generator
         yield yield_data('step', {'status': 'routing', 'text': 'Analyzing query intent...'})
 
         # The router gets the current query and the past history for context
-        route_decision = route_query_to_pipeline(user_query, chat_history, image_data, file_data, persona_key)
+        route_decision = route_query_to_pipeline(user_query, chat_history, image_data, file_data, persona_key, deep_search_mode)
         query_profile_type = route_decision.get("pipeline", "general_research")
         pipeline_params = route_decision.get("params", {})
 
+        yield yield_data('query_profile', {'type': query_profile_type})
+
         print(f"Query: '{user_query}', Profiled as: {query_profile_type}, Params: {pipeline_params}")
 
-        current_model_config = CONVERSATIONAL_MODEL
+        current_model_config = model or CONVERSATIONAL_MODEL
         current_api_key = CONVERSATIONAL_API_KEY
 
-        if query_profile_type in ["deep_research", "coding"]:
-            current_model_config = REASONING_MODEL
+        if query_profile_type in ["deep_research", "coding", "agent"]:
+            current_model_config = model or REASONING_MODEL
             current_api_key = REASONING_API_KEY
         elif query_profile_type in ["visualization_request", "html_preview", "stock_query"]:
-            current_model_config = VISUALIZATION_MODEL
+            current_model_config = model or VISUALIZATION_MODEL
             current_api_key = VISUALIZATION_API_KEY
 
         print(f"Using model: {current_model_config} for initial routing. Specific models may be used within pipelines.")
@@ -242,6 +247,7 @@ def search(): # This is now a REGULAR function, not a generator
             "default": run_default_pipeline,
             "unhinged": run_unhinged_pipeline,
             "custom": run_custom_pipeline,
+            "agent": run_default_pipeline, # Placeholder for agent pipeline
         }
         pipeline_func = pipelines.get(query_profile_type, run_default_pipeline)
 
@@ -503,7 +509,7 @@ def discover_page_route():
 
 @app.route('/fetch_articles/<category>')
 def fetch_articles(category):
-    from tools import search_duckduckgo
+    web_search_tool = WebSearchTool()
     cache_key = f"articles_{category}"
     
     if cache_key in CACHE['articles'] and time.time() - CACHE['articles'][cache_key]['timestamp'] < ARTICLE_LIST_CACHE_DURATION:
@@ -519,7 +525,7 @@ def fetch_articles(category):
         all_articles = []
         for cat in top_categories:
             query = "latest world headlines" if cat == "Top" else f"latest {cat.lower()} news"
-            results = search_duckduckgo(query, max_results=10, type='news')
+            results = web_search_tool.execute(query, max_results=10, type='news')
             all_articles.extend([{
                 'title': r.get('title'), 'snippet': r.get('text'), 'url': r.get('url'),
                 'thumbnail': r.get('image'), 'source': r.get('source'), 'category': cat
@@ -529,7 +535,7 @@ def fetch_articles(category):
     else:
         query_map = {"Top": "top world news", "Around the World": "international news"}
         query = query_map.get(category, f"latest {category.lower()} news")
-        results = search_duckduckgo(query, max_results=20, type='news')
+        results = web_search_tool.execute(query, max_results=20, type='news')
         articles_to_return = [{
             'title': r.get('title'), 'snippet': r.get('text'), 'url': r.get('url'),
             'thumbnail': r.get('image'), 'source': r.get('source'), 'category': category

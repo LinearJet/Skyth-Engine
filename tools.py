@@ -380,20 +380,6 @@ def scrape_google_images(driver, query, max_results=10):
         print(f"[Google Images] Error scraping Google Images: {e}")
         return []
 
-def search_duckduckgo(query, max_results=7, type='text'):
-    try:
-        with DDGS(timeout=20) as ddgs:
-            if type == 'news':
-                results = list(ddgs.news(query, max_results=max_results, safesearch='off'))
-                return [{"type": "web", "title": r['title'], "text": r['body'], "url": r['url'], "image": r.get("image"), "source": r.get("source")}
-                        for r in results]
-            else:
-                results = list(ddgs.text(query, max_results=max_results, safesearch='off'))
-                return [{"type": "web", "title": r['title'], "text": r['body'], "url": r['href']}
-                        for r in results]
-    except Exception as e: 
-        print(f"DDG text search error: {e}"); 
-        return []
 
 def scrape_bing_images(query, max_results=8):
     try:
@@ -427,49 +413,6 @@ def scrape_bing_images(query, max_results=8):
         print(f"[Bing Images] Bing image search error: {e}")
         return []
 
-def search_youtube_videos(query, max_results=5):
-    try:
-        print(f"[YouTube Search] Searching for: {query}, Max Results: {max_results}")
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        url = f"https://www.youtube.com/results?search_query={quote(query)}"
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        pattern = r'var ytInitialData = ({.*?});'
-        match = re.search(pattern, response.text)
-        
-        if not match:
-            print("[YouTube Search] Failed to find ytInitialData JSON in page.")
-            return []
-            
-        data = json.loads(match.group(1))
-        videos = []
-        
-        contents = data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [{}])[0].get('itemSectionRenderer', {}).get('contents', [])
-        
-        count = 0
-        for item in contents:
-            if 'videoRenderer' in item and count < max_results:
-                video = item['videoRenderer']
-                video_id = video.get('videoId', '')
-                title = ''.join(run.get('text', '') for run in video.get('title', {}).get('runs', []))
-                thumbnail = video.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', '')
-                
-                if video_id and title and thumbnail:
-                    videos.append({
-                        "type": "video",
-                        "title": title,
-                        "text": f"YouTube video: {title}",
-                        "thumbnail_url": thumbnail,
-                        "url": f"https://www.youtube.com/watch?v={video_id}",
-                        "video_id": video_id
-                    })
-                    count += 1
-        print(f"[YouTube Search] Found {len(videos)} videos.")
-        return videos
-    except Exception as e:
-        print(f"[YouTube Search] Error: {e}")
-        return []
 
 def get_youtube_transcript(video_url):
     try:
@@ -834,42 +777,6 @@ def _select_relevant_images_for_prompt(prompt, all_image_urls, api_key, model_co
     
     return []
 
-def generate_image_from_gemini(prompt_text):
-    """
-    NEW: Helper function to generate an image from a text prompt using Gemini.
-    """
-    try:
-        if not IMAGE_GENERATION_API_KEY:
-            raise ValueError("GEMINI_API_KEY for image generation is not configured.")
-        
-        print(f"[Gemini Image Gen] Calling model for prompt: '{prompt_text}'")
-        image_client = google_genai.Client(api_key=IMAGE_GENERATION_API_KEY)
-        
-        response = image_client.models.generate_content(
-            model=IMAGE_GENERATION_MODEL,
-            contents=prompt_text,
-            config=google_types.GenerateContentConfig(
-              response_modalities=['TEXT', 'IMAGE']
-            )
-        )
-        
-        image_bytes = None
-        for part in response.candidates[0].content.parts:
-            if part.inline_data is not None:
-                image_bytes = part.inline_data.data
-                break
-        
-        if image_bytes:
-            img_base64 = base64.b64encode(image_bytes).decode('utf-8')
-            return {"type": "generated_image", "base64_data": img_base64, "prompt": prompt_text, "source_url": "#gemini"}
-        else:
-            text_response = response.candidates[0].content.parts[0].text if response.candidates[0].content.parts else "Model did not return an image."
-            print(f"Gemini Image Gen Failed: {text_response}")
-            return {"type": "error", "message": f"Gemini model refused to generate the image. Reason: {text_response}"}
-            
-    except Exception as e:
-        print(f"Gemini Image Gen connection error: {e}")
-        return {"type": "error", "message": f"Gemini API connection error: {str(e)}"}
 
 def generate_image_from_pollinations(prompt_text):
     clean_prompt = quote(prompt_text)
@@ -908,7 +815,7 @@ def get_persona_prompt_name(persona_key, custom_persona_text):
     }
     return personas_map.get(persona_key, personas_map["default"])
 
-def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_key='default'):
+def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_key='default', deep_search_mode='none'):
     """
     Uses an LLM to analyze the user's query and route it to the appropriate pipeline.
     Replaces all previous keyword-based logic.
@@ -929,9 +836,14 @@ def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_
         {"name": "stock_query", "description": "Retrieves live stock data and generates an interactive chart for a specific stock ticker."},
         {"name": "visualization_request", "description": "Generates an interactive HTML5 canvas visualization for data, math, or physics concepts."},
         {"name": "academic_pipeline", "description": "Use when the 'academic' persona is active. Provides structured, sourced answers for academic queries."},
+        {"name": "agent", "description": "A placeholder for a future agentic system. Use when agent mode is active."},
     ]
 
     # Handle preconditions that don't require an LLM for efficiency
+    if deep_search_mode == 'agent':
+        return {"pipeline": "agent", "params": {}}
+    if deep_search_mode == 'deep_research':
+        return {"pipeline": "deep_research", "params": {}}
     if persona_key == 'academic':
         return {"pipeline": "academic_pipeline", "params": {}}
     
@@ -989,58 +901,6 @@ You are an expert routing agent. Your task is to analyze the user's **current qu
         print(f"Error during LLM routing: {e}. Falling back to general research.")
         return {"pipeline": "general_research", "params": {}}
 
-def get_stock_data(ticker, time_range='1mo'):
-    """
-    Fetches historical stock data for a given ticker using the yfinance library.
-    This replaces the previous Node.js script dependency.
-    """
-    print(f"[yfinance] Fetching data for ticker: {ticker}, range: {time_range}")
-    try:
-        stock = yf.Ticker(ticker)
-        
-        period_map = {
-            '1d': '1d', '5d': '5d', '1wk': '1wk', '1mo': '1mo',
-            '3mo': '3mo', '6mo': '6mo', 'ytd': 'ytd', '1y': '1y',
-            '5y': '5y', 'max': 'max'
-        }
-        period = period_map.get(time_range, '1mo')
-        
-        interval = '1h' if period == '1d' else '1d'
-
-        hist = stock.history(period=period, interval=interval)
-
-        if hist.empty:
-            # Fallback for crypto-like tickers (e.g., BTC -> BTC-USD)
-            if '-' not in ticker:
-                 print(f"[yfinance] No data for {ticker}, trying {ticker}-USD")
-                 hist = yf.Ticker(f"{ticker}-USD").history(period=period, interval=interval)
-            if hist.empty:
-                print(f"[yfinance] No data found for ticker: {ticker} (or fallback)")
-                return {"error": f"No historical data found for ticker '{ticker}'. It might be delisted or an invalid symbol."}
-
-        hist = hist.reset_index()
-        
-        date_col_name = next((col for col in ['Datetime', 'Date'] if col in hist.columns), None)
-        if not date_col_name:
-            raise ValueError("Date or Datetime column not found in yfinance history.")
-
-        hist.rename(columns={
-            date_col_name: 'date', 'Open': 'open', 'High': 'high',
-            'Low': 'low', 'Close': 'close', 'Volume': 'volume'
-        }, inplace=True)
-
-        hist['date'] = pd.to_datetime(hist['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
-
-        required_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
-        result_df = hist[[col for col in required_cols if col in hist.columns]]
-
-        data = result_df.to_dict('records')
-        print(f"[yfinance] Successfully fetched {len(data)} data points for {ticker}.")
-        return data
-
-    except Exception as e:
-        print(f"[yfinance] Error fetching data for {ticker}: {e}")
-        return {"error": f"An error occurred while fetching data for '{ticker}': {str(e)}"}
 
 
 def generate_stock_chart_html(ticker, stock_data, time_range='1mo'):

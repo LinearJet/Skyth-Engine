@@ -5,11 +5,13 @@ from config import CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL
 from tools import (
     analyze_academic_intent_with_llm,
     plan_research_steps_with_llm,
-    search_duckduckgo,
     generate_canvas_visualization,
     call_llm,
 )
 from utils import yield_data, _stream_llm_response
+from tool_registry import ToolRegistry
+
+registry = ToolRegistry()
 
 def run_academic_pipeline(query, persona_name, api_key, model_config, chat_history, query_profile_type, custom_persona_text, persona_key, **kwargs):
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
@@ -37,7 +39,7 @@ def run_academic_pipeline(query, persona_name, api_key, model_config, chat_histo
     all_snippets = []
     if search_plan:
         with ThreadPoolExecutor(max_workers=len(search_plan)) as executor:
-            future_to_query = {executor.submit(search_duckduckgo, q, max_results=4): q for q in search_plan}
+            future_to_query = {executor.submit(registry.execute_tool, "web_search", query=q, max_results=4): q for q in search_plan}
             for i, future in enumerate(as_completed(future_to_query)):
                 q = future_to_query[future]
                 yield yield_data('step', {'status': 'searching', 'text': f'Step {i+1}/{len(search_plan)}: "{q[:35]}..."'})

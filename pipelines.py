@@ -17,17 +17,20 @@ from config import (
     CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, REASONING_API_KEY, REASONING_MODEL,
     VISUALIZATION_API_KEY, VISUALIZATION_MODEL, IMAGE_GENERATION_API_KEY, IMAGE_GENERATION_MODEL
 )
+from tool_registry import ToolRegistry
 from tools import (
-    plan_research_steps_with_llm, search_duckduckgo, reformulate_query_with_context,
+    plan_research_steps_with_llm, reformulate_query_with_context,
     _generate_and_yield_suggestions, call_llm, get_persona_prompt_name,
-    extract_ticker_with_llm, _extract_time_range, get_stock_data, generate_stock_chart_html,
+    extract_ticker_with_llm, _extract_time_range, generate_stock_chart_html,
     get_youtube_transcript, parse_with_bs4, setup_selenium_driver, parse_url_comprehensive,
     is_high_quality_image, get_filename_from_url, _select_relevant_images_for_prompt,
     generate_canvas_visualization, _create_error_html_page, _generate_pdf_from_html_selenium,
-    _create_image_gallery_html, scrape_bing_images, scrape_google_images, search_youtube_videos,
-    generate_image_from_gemini, generate_image_from_pollinations,
+    _create_image_gallery_html, scrape_bing_images, scrape_google_images,
+    generate_image_from_pollinations,
     route_query_to_pipeline, analyze_academic_intent_with_llm, generate_html_preview
 )
+
+registry = ToolRegistry()
 
 # ==============================================================================
 # PIPELINE STREAMING FUNCTIONS
@@ -64,7 +67,7 @@ def run_standard_research(query, persona_name, api_key, model_config, chat_histo
 
     all_snippets = []
     with ThreadPoolExecutor(max_workers=len(search_plan)) as executor:
-        future_to_query = {executor.submit(search_duckduckgo, q, max_results=5): q for q in search_plan}
+        future_to_query = {executor.submit(registry.execute_tool, "web_search", query=q, max_results=5): q for q in search_plan}
         for i, future in enumerate(as_completed(future_to_query)):
             q = future_to_query[future]
             yield yield_data('step', {'status': 'searching', 'text': f'Step {i+1}/{len(search_plan)}: Searching for "{q[:40]}..."'})
@@ -126,7 +129,7 @@ def run_stock_pipeline(query, persona_name, api_key, model_config, chat_history,
     yield yield_data('step', {'status': 'searching', 'text': f'Fetching {time_range.upper()} market data for {ticker}...'})
     
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
-    stock_data = get_stock_data(ticker, time_range)
+    stock_data = registry.execute_tool("stock_data_fetcher", ticker=ticker, time_range=time_range)
 
     if stock_data and "error" not in stock_data:
         yield yield_data('step', {'status': 'thinking', 'text': 'Generating interactive chart...'})
@@ -272,7 +275,7 @@ def run_image_analysis_pipeline(query, persona_name, api_key, model_config, chat
     if image_description or (named_entities and named_entities.lower() != 'none'):
         yield yield_data('step', {'status': 'searching', 'text': 'Searching web based on image content...'})
         search_query = f"{query} {image_description} {named_entities if named_entities.lower() != 'none' else ''}".strip()
-        web_snippets = search_duckduckgo(search_query, max_results=4)
+        web_snippets = registry.execute_tool("web_search", query=search_query, max_results=4)
         if web_snippets:
             final_data['sources'] = web_snippets
             yield yield_data('sources', web_snippets)
@@ -626,7 +629,7 @@ def run_deep_research_pipeline(query, persona_name, api_key, model_config, chat_
     
     all_urls = set()
     with ThreadPoolExecutor(max_workers=len(search_plan)) as executor:
-        future_to_query = {executor.submit(search_duckduckgo, q, max_results=3): q for q in search_plan}
+        future_to_query = {executor.submit(registry.execute_tool, "web_search", query=q, max_results=3): q for q in search_plan}
         for future in as_completed(future_to_query):
             try:
                 results = future.result()
@@ -876,7 +879,7 @@ def run_image_generation_pipeline(query, persona_name, api_key, model_config, ch
     prompt_for_image = reformulated_query
     
     yield yield_data('step', {'status': 'thinking', 'text': f'Generating image for: "{prompt_for_image}" via Gemini...'})
-    image_result = generate_image_from_gemini(prompt_for_image)
+    image_result = registry.execute_tool("image_generator", prompt=prompt_for_image)
 
     if image_result['type'] == 'error':
         yield yield_data('step', {'status': 'warning', 'text': f"Gemini failed: {image_result.get('message', '')}. Falling back to Pollinations.ai..."})
@@ -913,7 +916,7 @@ def run_video_search_pipeline(query, persona_name, api_key, model_config, chat_h
 
     search_term = search_query
 
-    video_search_results = search_youtube_videos(search_term)
+    video_search_results = registry.execute_tool("youtube_search", query=search_term)
 
     if video_search_results:
         final_data['videoResults'] = video_search_results
