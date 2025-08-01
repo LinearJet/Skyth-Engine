@@ -24,6 +24,10 @@ class FileParserTool(BaseTool):
             {"name": "file_name", "type": "string", "description": "The name of the file, including its extension."}
         ]
 
+    @property
+    def output_type(self) -> str:
+        return "file_content"
+
     def execute(self, file_data: str, file_name: str) -> Dict[str, Any]:
         """
         Parses the file content. Returns a dict with 'text_content' or 'error'.

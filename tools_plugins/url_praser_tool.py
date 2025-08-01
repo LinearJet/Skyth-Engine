@@ -181,7 +181,7 @@ class UrlParserTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Comprehensively parses a web URL to extract text, images, videos, and links. Uses a tiered approach (fast BS4, then Selenium fallback)."
+        return "Comprehensively parses a web URL to extract text, images, videos, and links. Use when the user provides a URL and asks to analyze, summarize, or 'read' it."
 
     @property
     def parameters(self) -> List[Dict[str, Any]]:
@@ -189,6 +189,10 @@ class UrlParserTool(BaseTool):
             {"name": "url", "type": "string", "description": "The URL of the web page to parse."},
             {"name": "deep_scrape", "type": "boolean", "description": "Force using the deep (Selenium) scraper instead of trying the fast scraper first."}
         ]
+
+    @property
+    def output_type(self) -> str:
+        return "parsed_url_content"
 
     def execute(self, url: str, deep_scrape: bool = False, driver=None) -> Optional[Dict[str, Any]]:
         """

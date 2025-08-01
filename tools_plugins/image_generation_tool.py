@@ -24,6 +24,10 @@ class ImageGenerationTool(BaseTool):
             {"name": "prompt", "type": "string", "description": "The text prompt to generate the image from."}
         ]
 
+    @property
+    def output_type(self) -> str:
+        return "generated_image"
+
     def execute(self, prompt: str) -> Dict[str, Any]:
         """
         Generates an image from a text prompt using Gemini.

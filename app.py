@@ -22,12 +22,9 @@ from tools import (
 from pipelines import (
     run_pure_chat, run_visualization_pipeline,
     run_html_pipeline, run_standard_research,
-    run_image_generation_pipeline,
-    run_image_search_pipeline, run_video_search_pipeline,
-    run_youtube_video_pipeline, run_url_deep_parse_pipeline,
     run_deep_research_pipeline, run_image_analysis_pipeline,
-    run_image_editing_pipeline, run_file_analysis_pipeline,
-    run_stock_pipeline, yield_data
+    run_file_analysis_pipeline,
+    run_stock_pipeline, yield_data, run_generic_tool_pipeline
 )
 from academic import run_academic_pipeline
 from coding import run_coding_pipeline
@@ -40,7 +37,7 @@ from tool_registry import ToolRegistry
 # Apply CORS to the app object from config
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Instantiate the tool registry for use in API endpoints
+# Instantiate the tool registry for use in API endpoints and the main search function
 registry = ToolRegistry()
 
 # ==============================================================================
@@ -231,21 +228,16 @@ def search(): # This is now a REGULAR function, not a generator
 
         print(f"Using model: {current_model_config} for initial routing. Specific models may be used within pipelines.")
 
-        pipelines = {
+        # Specialized pipelines that have complex logic beyond a single tool call
+        specialized_pipelines = {
             "conversational": run_pure_chat,
             "visualization_request": run_visualization_pipeline,
             "academic_pipeline": run_academic_pipeline,
             "html_preview": run_html_pipeline,
             "coding": run_coding_pipeline,
             "general_research": run_standard_research,
-            "image_generation": run_image_generation_pipeline,
-            "image_search": run_image_search_pipeline,
-            "video_search": run_video_search_pipeline,
-            "youtube_video_analysis": run_youtube_video_pipeline,
-            "url_deep_parse": run_url_deep_parse_pipeline,
             "deep_research": run_deep_research_pipeline,
             "image_analysis": run_image_analysis_pipeline,
-            "image_editing": run_image_editing_pipeline,
             "file_analysis": run_file_analysis_pipeline,
             "stock_query": run_stock_pipeline,
             "default": run_default_pipeline,
@@ -253,45 +245,44 @@ def search(): # This is now a REGULAR function, not a generator
             "custom": run_custom_pipeline,
             "agent": run_default_pipeline, # Placeholder for agent pipeline
         }
-        pipeline_func = pipelines.get(query_profile_type, run_default_pipeline)
+
+        # The "Plug-and-Play" Logic
+        # If the router selected a tool from the registry, use the generic pipeline.
+        # Otherwise, fall back to the specialized pipelines dictionary.
+        if query_profile_type in registry.tools:
+            pipeline_func = run_generic_tool_pipeline
+        else:
+            pipeline_func = specialized_pipelines.get(query_profile_type, run_default_pipeline)
 
         pipeline_kwargs = {
             "image_data": image_data, "file_data": file_data, "file_name": file_name,
-            **pipeline_params
+            "params": pipeline_params # Pass the router's params to the pipeline
         }
 
-        # FIX 1: Handle query parameter conflict from router
-        # If the router provides a 'query', it overrides the original user_query.
-        # Then we remove it from kwargs to avoid the TypeError.
-        final_query = pipeline_kwargs.pop('query', user_query)
+        final_query = user_query # The generic pipeline gets the original query for its acknowledgment prompt
 
-        # The pipeline gets the past history, not including the current query
         main_generator = pipeline_func(
             final_query, active_persona_name, current_api_key, current_model_config,
             chat_history, query_profile_type, custom_persona_text,
             persona_key, **pipeline_kwargs
         )
 
-        # FIX 2: Add robust error handling for the entire stream
+        # Robust error handling for the entire stream
         try:
             for chunk in main_generator:
                 if chunk.startswith('data: '):
                     try:
                         chunk_data = json.loads(chunk[6:])
-                        # FIX 3: Correctly process final_response without stopping the yield
                         if chunk_data.get('type') == 'final_response':
                             final_data_packet = chunk_data.get('data')
 
                             if final_data_packet and chat_id and user:
-                                # --- NEW HISTORY SAVING LOGIC ---
                                 conn = get_db_connection()
                                 try:
-                                    # Save user message
                                     conn.execute(
                                         'INSERT INTO episodic_memory (user_id, chat_id, role, content) VALUES (?, ?, ?, ?)',
                                         (user_id, chat_id, 'user', user_query)
                                     )
-                                    # Save assistant message
                                     conn.execute(
                                         'INSERT INTO episodic_memory (user_id, chat_id, role, content, final_data_json) VALUES (?, ?, ?, ?, ?)',
                                         (user_id, chat_id, 'assistant', final_data_packet.get('content', ''), json.dumps(final_data_packet))
@@ -299,13 +290,12 @@ def search(): # This is now a REGULAR function, not a generator
                                     conn.commit()
                                 finally:
                                     conn.close()
-                                # --- END NEW LOGIC ---
 
                                 conn = get_db_connection()
                                 message_count = conn.execute('SELECT COUNT(id) FROM episodic_memory WHERE chat_id = ? AND user_id = ?', (chat_id, user_id)).fetchone()[0]
                                 conn.close()
 
-                                if message_count == 2: # A turn is 2 messages (user+assistant)
+                                if message_count == 2:
                                     title = generate_chat_title(user_query, final_data_packet.get('content', ''))
                                     if title:
                                         conn = get_db_connection()
@@ -806,12 +796,12 @@ if __name__ == '__main__':
     from tools import get_current_datetime_str
     init_db()
 
-    print(f"🚀 SKYTH ENGINE v10.5 (Plugin Tools) - Running with current date: {get_current_datetime_str()}")
+    print(f"🚀 SKYTH ENGINE v11.0 (Generalized Plugin System) - Running with current date: {get_current_datetime_str()}")
     print(f"   Conversational Model: {CONVERSATIONAL_MODEL}")
     print(f"   Reasoning Model: {REASONING_MODEL} (Reserved for Coding & Deep Research)")
     print(f"   Visualization Model: {VISUALIZATION_MODEL}")
     print(f"   Utility/Routing Model: {UTILITY_MODEL}")
     print(f"   Image Generation/Editing Model: {os.getenv('IMAGE_GENERATION_MODEL', 'gemini-2.0-flash-preview-image-generation')}")
-    print("   Features: Modular tool plugins, robust DB initialization, persistent file/image context, LLM-based query routing.")
+    print("   Features: Generalized 'plug-and-play' tool system, dynamic router, robust DB, persistent context.")
     print("🌐 Server running on http://127.0.0.1:5000")
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))

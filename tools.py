@@ -51,6 +51,7 @@ from config import (
     UTILITY_API_KEY, UTILITY_MODEL
 )
 from utils import yield_data
+from tool_registry import ToolRegistry
 
 # ==============================================================================
 # DISCOVER PAGE LOGIC (Integrated from pork.py)
@@ -586,27 +587,37 @@ def get_persona_prompt_name(persona_key, custom_persona_text):
 
 def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_key='default', deep_search_mode='none'):
     """
-    Uses an LLM to analyze the user's query and route it to the appropriate pipeline.
-    Replaces all previous keyword-based logic.
+    Uses an LLM to analyze the user's query and route it to the appropriate pipeline or tool.
+    This is now fully dynamic and builds its tool list from the ToolRegistry.
     """
-    available_tools = [
-        {"name": "conversational", "description": "Use for simple chat, greetings, acknowledgements, or when no other tool is appropriate."},
-        {"name": "general_research", "description": "Answers a general question by searching the web and synthesizing the results. Use for most 'who/what/where/when/why' questions."},
+    registry = ToolRegistry()
+    
+    # Dynamically build the list of available tools from the registry
+    available_tools = []
+    for tool in registry.get_all_tools():
+        tool_info = {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters
+        }
+        available_tools.append(tool_info)
+        
+    # Add specialized, multi-step pipelines to the list of choices for the LLM
+    specialized_pipelines = [
+        {"name": "conversational", "description": "Use for simple chat, greetings, acknowledgements, or when no other tool or pipeline is appropriate.", "parameters": []},
+        {"name": "general_research", "description": "Answers a general question by searching the web with multiple queries and synthesizing the results. Use for most 'who/what/where/when/why' questions that require exploration.", "parameters": []},
         {"name": "coding", "description": "Handles requests for writing, debugging, or explaining code. Specify if the user wants a visual HTML output (e.g., a webpage, an animation) or just text/markdown code.", "parameters": [{"name": "visual_output_required", "type": "boolean", "description": "Set to true if the user's query implies a visual HTML output like a webpage, CSS design, or JavaScript animation."}]},
-        {"name": "image_generation", "description": "Generates a new image from a text description. Use when the user explicitly asks to 'create', 'draw', or 'generate' an image."},
-        {"name": "image_search", "description": "Finds existing images from the web. Use when the user asks for 'pictures of', 'images of', etc."},
-        {"name": "video_search", "description": "Finds videos from YouTube."},
-        {"name": "image_analysis", "description": "Analyzes a user-provided image to answer questions about it. This is the default tool when an image is uploaded and the query is a question about it."},
-        {"name": "image_editing", "description": "Edits a user-provided image based on instructions. Use when an image is provided and the user asks to 'add', 'remove', 'change style', etc."},
-        {"name": "file_analysis", "description": "Reads and analyzes the content of an uploaded file (PDF, TXT, etc.) to answer questions. This is the only tool to use when a file is uploaded."},
-        {"name": "youtube_video_analysis", "description": "Analyzes the transcript of a YouTube video URL to answer questions."},
-        {"name": "url_deep_parse", "description": "Scrapes and analyzes the content of a generic web URL."},
-        {"name": "deep_research", "description": "Conducts in-depth research on a topic by analyzing multiple sources and generating a detailed HTML report. Use for queries like 'comprehensive report on...'."},
-        {"name": "stock_query", "description": "Retrieves live stock data and generates an interactive chart for a specific stock ticker."},
-        {"name": "visualization_request", "description": "Generates an interactive HTML5 canvas visualization for data, math, or physics concepts."},
-        {"name": "academic_pipeline", "description": "Use when the 'academic' persona is active. Provides structured, sourced answers for academic queries."},
-        {"name": "agent", "description": "A placeholder for a future agentic system. Use when agent mode is active."},
+        {"name": "image_analysis", "description": "Analyzes a user-provided image to answer questions about it. This is the default when an image is uploaded and the query is a question about it.", "parameters": []},
+        {"name": "file_analysis", "description": "Reads and analyzes the content of an uploaded file (PDF, TXT, etc.) to answer questions. This is the only tool to use when a file is uploaded.", "parameters": []},
+        {"name": "deep_research", "description": "Conducts in-depth research on a topic by analyzing multiple sources and generating a detailed HTML report. Use for queries like 'comprehensive report on...'.", "parameters": []},
+        {"name": "stock_query", "description": "Retrieves live stock data and generates an interactive chart for a specific stock ticker.", "parameters": []},
+        {"name": "visualization_request", "description": "Generates an interactive HTML5 canvas visualization for data, math, or physics concepts.", "parameters": []},
+        {"name": "academic_pipeline", "description": "Use when the 'academic' persona is active. Provides structured, sourced answers for academic queries.", "parameters": []},
+        {"name": "agent", "description": "A placeholder for a future agentic system. Use when agent mode is active.", "parameters": []},
     ]
+
+    # Combine tools and specialized pipelines for the router's consideration
+    all_choices = specialized_pipelines + available_tools
 
     # Handle preconditions that don't require an LLM for efficiency
     if deep_search_mode == 'agent':
@@ -616,21 +627,23 @@ def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_
     if persona_key == 'academic':
         return {"pipeline": "academic_pipeline", "params": {}}
     
+    # If a URL is present, it's a strong signal for a specific tool.
     url_pattern = r'https?:\/\/[^\s]+'
     url_match = re.search(url_pattern, query.strip())
     if url_match:
-        if "youtube.com" in url_match.group(0) or "youtu.be" in url_match.group(0):
-            return {"pipeline": "youtube_video_analysis", "params": {}}
+        url = url_match.group(0)
+        if "youtube.com" in url or "youtu.be" in url:
+            return {"pipeline": "youtube_transcript_getter", "params": {"video_url": url}}
         else:
-            return {"pipeline": "url_deep_parse", "params": {}}
+            return {"pipeline": "url_parser", "params": {"url": url}}
 
     history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-6:]])
 
     routing_prompt = f"""
-You are an expert routing agent. Your task is to analyze the user's **current query** and select the single most appropriate tool to handle it. Use the conversation history for context, but the **current query is the primary driver** for your decision.
+You are an expert routing agent. Your task is to analyze the user's **current query** and select the single most appropriate tool or pipeline to handle it. Use the conversation history for context, but the **current query is the primary driver** for your decision.
 
-**Available Tools:**
-{json.dumps(available_tools, indent=2)}
+**Available Tools and Pipelines:**
+{json.dumps(all_choices, indent=2)}
 
 **Context:**
 - User has uploaded an image: {'Yes' if image_data else 'No'}
@@ -643,11 +656,12 @@ You are an expert routing agent. Your task is to analyze the user's **current qu
 
 **Instructions:**
 1.  Analyze the user's **current query** to understand their immediate intent.
-2.  If the query is a direct request for a specific tool (e.g., "generate an image", "find pictures of"), choose that tool, even if a file or image is present in the context.
-3.  If the query is ambiguous but a file or image is in context, assume the query is about that file/image and choose the appropriate analysis tool.
-4.  Choose exactly one tool from the list.
-5.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the name of the chosen tool) and "params" (an object containing the required parameters).
-6.  If no specific parameters are needed, "params" should be an empty object {{}}.
+2.  If the query directly implies a tool (e.g., "generate an image", "find pictures of", "what is this stock doing?"), choose that specific tool.
+3.  If a file or image is in context and the query is a question, assume the query is about that file/image and choose the 'image_analysis' or 'file_analysis' pipeline.
+4.  For general knowledge questions, prefer 'general_research'. For simple requests, prefer 'conversational'.
+5.  Choose exactly one tool/pipeline from the list.
+6.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the 'name' of the chosen tool/pipeline) and "params" (an object containing the required parameters for that choice).
+7.  If no specific parameters are needed, "params" should be an empty object {{}}.
 
 **JSON Output:**
 """

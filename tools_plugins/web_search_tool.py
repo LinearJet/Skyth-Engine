@@ -23,6 +23,10 @@ class WebSearchTool(BaseTool):
             {"name": "type", "type": "string", "description": "The type of search, either 'text' or 'news'."}
         ]
 
+    @property
+    def output_type(self) -> str:
+        return "web_search_results"
+
     def execute(self, query: str, max_results: int = 7, type: str = 'text') -> List[Dict[str, Any]]:
         try:
             with DDGS(timeout=20) as ddgs:

@@ -23,6 +23,10 @@ class StockDataTool(BaseTool):
             {"name": "time_range", "type": "string", "description": "The time range for the data (e.g., '1mo', '1y')."}
         ]
 
+    @property
+    def output_type(self) -> str:
+        return "stock_data"
+
     def execute(self, ticker: str, time_range: str = '1mo') -> Union[List[Dict[str, Any]], Dict[str, str]]:
         """
         Fetches historical stock data for a given ticker using the yfinance library.

@@ -122,6 +122,10 @@ class ImageSearchTool(BaseTool):
             {"name": "max_results_per_source", "type": "integer", "description": "The max number of results from each source (Google, Bing)."}
         ]
 
+    @property
+    def output_type(self) -> str:
+        return "image_search_results"
+
     def execute(self, query: str, max_results_per_source: int = 8) -> List[Dict[str, Any]]:
         google_results = []
         bing_results = []

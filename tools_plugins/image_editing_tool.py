@@ -27,6 +27,10 @@ class ImageEditingTool(BaseTool):
             {"name": "image_data", "type": "string", "description": "The base64 encoded string of the image to edit."}
         ]
 
+    @property
+    def output_type(self) -> str:
+        return "edited_image"
+
     def execute(self, prompt: str, image_data: str) -> Dict[str, Any]:
         """
         Edits an image based on a text prompt using Gemini.
@@ -66,6 +70,8 @@ class ImageEditingTool(BaseTool):
                 return {
                     "type": "edited_image", 
                     "base64_data": edited_image_base64, 
+                    "prompt": prompt,
+                    "title": "Edited Image",
                     "text_response": text_response_from_model
                 }
             else:

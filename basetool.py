@@ -29,6 +29,15 @@ class BaseTool(ABC):
         Returns a schema describing the inputs the tool accepts.
         """
         pass
+    
+    @property
+    @abstractmethod
+    def output_type(self) -> str:
+        """
+        Returns the event type for the UI to handle the tool's output.
+        e.g., 'image_search_results', 'generated_image', 'video_search_results'
+        """
+        pass
 
     @abstractmethod
     def execute(self, **kwargs: Any) -> Any:

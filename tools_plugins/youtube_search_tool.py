@@ -25,6 +25,10 @@ class YoutubeSearchTool(BaseTool):
             {"name": "max_results", "type": "integer", "description": "The maximum number of results to return."}
         ]
 
+    @property
+    def output_type(self) -> str:
+        return "video_search_results"
+
     def execute(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
         try:
             print(f"[YouTube Search] Searching for: {query}, Max Results: {max_results}")

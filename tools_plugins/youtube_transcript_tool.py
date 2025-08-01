@@ -14,13 +14,17 @@ class YoutubeTranscriptTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Fetches the full text transcript from a given YouTube video URL."
+        return "Fetches the full text transcript from a given YouTube video URL. Use when a user provides a YouTube link and asks a question about it."
 
     @property
     def parameters(self) -> List[Dict[str, Any]]:
         return [
             {"name": "video_url", "type": "string", "description": "The full URL of the YouTube video."}
         ]
+
+    @property
+    def output_type(self) -> str:
+        return "youtube_transcript"
 
     def execute(self, video_url: str) -> Dict[str, str]:
         """
