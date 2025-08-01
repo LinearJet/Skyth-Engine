@@ -26,7 +26,7 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
 # Matplotlib and other specific tool imports
 import trafilatura # For improved article extraction
-from youtube_transcript_api import YouTubeTranscriptApi
+
 
 # New imports for Edge TTS
 import edge_tts
@@ -149,7 +149,7 @@ def extract_text_content_selenium(url):
             driver.quit()
 
 # ==============================================================================
-# NEW AND INTEGRATED TOOLS
+# SHARED UTILITY TOOLS
 # ==============================================================================
 
 def setup_selenium_driver():
@@ -187,140 +187,6 @@ def get_filename_from_url(url):
     except Exception:
         return f"download_{uuid.uuid4().hex[:8]}.bin"
 
-def parse_with_bs4(url):
-    """
-    Fast URL parser using requests and BeautifulSoup. Extracts title, text, images, and links.
-    """
-    print(f"[URL Parser - BS4] Attempting fast parse of: {url}")
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-
-        content_type = response.headers.get('content-type', '').lower()
-        if 'html' not in content_type:
-            print(f"[URL Parser - BS4] Content is not HTML ({content_type}), skipping parse.")
-            return None
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        for tag in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 'form']):
-            tag.decompose()
-        
-        title = soup.title.string.strip() if soup.title else ''
-        
-        main_content_selectors = ['article', 'main', '[role="main"]', '.post-content', '.article-body', '#content', '#main-content']
-        main_content_tag = None
-        for selector in main_content_selectors:
-            tag = soup.select_one(selector)
-            if tag:
-                main_content_tag = tag
-                break
-        
-        if not main_content_tag:
-            main_content_tag = soup.body
-
-        text_content = ''
-        links = []
-        images = []
-
-        if main_content_tag:
-            lines = (line.strip() for line in main_content_tag.get_text(separator='\n').splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text_content = '\n'.join(chunk for chunk in chunks if chunk)
-
-            for link in main_content_tag.find_all('a', href=True):
-                href = link.get('href')
-                if href and href.startswith('http'):
-                    links.append({'url': urljoin(url, href), 'text': link.get_text(strip=True)})
-            
-            for img in main_content_tag.find_all('img', src=True):
-                src = img.get('src')
-                if src and not src.startswith('data:image'):
-                    images.append(urljoin(url, src))
-
-        return {
-            'url': url,
-            'domain': urlparse(url).netloc,
-            'title': title,
-            'text_content': text_content,
-            'images': images,
-            'videos': [], # BS4 is not reliable for videos
-            'links': links,
-            'source_parser': 'bs4'
-        }
-    except Exception as e:
-        print(f"[URL Parser - BS4] Error during fast parse of {url}: {e}")
-        return None
-
-def parse_url_comprehensive(driver, url):
-    """
-    Comprehensive URL parsing - extracts text, images, videos, and links using Selenium.
-    """
-    print(f"[URL Parser - Selenium] Starting comprehensive parse of: {url}")
-    parsed_data = {
-        'url': url,
-        'domain': urlparse(url).netloc,
-        'title': '',
-        'text_content': '',
-        'images': [],
-        'videos': [],
-        'links': [],
-        'source_parser': 'selenium'
-    }
-
-    try:
-        driver.get(url)
-        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        time.sleep(3)
-
-        for _ in range(3):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.5)
-
-        parsed_data['title'] = driver.title
-        body = driver.find_element(By.TAG_NAME, "body")
-        parsed_data['text_content'] = body.text
-
-        page_source = driver.page_source
-
-        image_urls = set()
-        for img in driver.find_elements(By.TAG_NAME, "img"):
-            src = img.get_attribute("src") or img.get_attribute("data-src")
-            if src and not src.startswith('data:image'):
-                if is_high_quality_image(src):
-                    image_urls.add(urljoin(url, src))
-        
-        regex_patterns = [r'background-image:\s*url\(["\']?([^"\']*)["\']?\)']
-        for pattern in regex_patterns:
-            for match in re.findall(pattern, page_source, re.IGNORECASE):
-                 if not match.startswith('data:image') and is_high_quality_image(match):
-                    image_urls.add(urljoin(url, match))
-        parsed_data['images'] = list(image_urls)
-
-        video_urls = set()
-        for video in driver.find_elements(By.TAG_NAME, "video"):
-            src = video.get_attribute("src")
-            if src: video_urls.add(urljoin(url, src))
-            for source in video.find_elements(By.TAG_NAME, "source"):
-                src = source.get_attribute("src")
-                if src: video_urls.add(urljoin(url, src))
-        parsed_data['videos'] = list(video_urls)
-
-        link_data = []
-        for link in driver.find_elements(By.TAG_NAME, "a"):
-            href = link.get_attribute("href")
-            if href and href.startswith('http'):
-                link_data.append({'url': href, 'text': link.text.strip()})
-        parsed_data['links'] = link_data
-
-        print(f"[URL Parser] Finished parsing. Found: {len(parsed_data['images'])} images, {len(parsed_data['videos'])} videos, {len(parsed_data['links'])} links.")
-        return parsed_data
-
-    except Exception as e:
-        print(f"[URL Parser] Error during comprehensive parsing of {url}: {e}")
-        return parsed_data
-
 def is_high_quality_image(url):
     """Filter for high quality images based on URL patterns and size indicators."""
     if not url:
@@ -344,103 +210,6 @@ def is_high_quality_image(url):
         return True
     
     return True
-
-def scrape_google_images(driver, query, max_results=10):
-    """
-    Extracts high-quality image URLs from Google Images.
-    """
-    print(f"[Google Images] Searching for: {query}")
-    try:
-        encoded_query = quote(query)
-        url = f"https://www.google.com/search?tbm=isch&q={encoded_query}&safe=off&tbs=isz:m"
-        driver.get(url)
-        time.sleep(2)
-
-        for _ in range(5):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.5)
-
-        img_elements = driver.find_elements(By.TAG_NAME, "img")
-        
-        image_urls = set()
-        for img in img_elements:
-            src = img.get_attribute("src") or img.get_attribute("data-src")
-            if src and src.startswith('http'):
-                if not src.startswith('data:image') and is_high_quality_image(src):
-                    image_urls.add(src)
-            if len(image_urls) >= max_results:
-                break
-        
-        image_urls_list = list(image_urls)
-        print(f"[Google Images] Found {len(image_urls_list)} high-quality images.")
-        
-        source_page_url = f"https://www.google.com/search?tbm=isch&q={encoded_query}"
-        return [{"type": "image_search_result", "title": query, "thumbnail_url": url, "image_url": url, "source_url": source_page_url} for url in image_urls_list]
-    except Exception as e:
-        print(f"[Google Images] Error scraping Google Images: {e}")
-        return []
-
-
-def scrape_bing_images(query, max_results=8):
-    try:
-        print(f"[Bing Images] Searching for: {query}")
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        url = f"https://www.bing.com/images/search?q={quote(query)}&form=HDRSC2&qft=+filterui:imagesize-large"
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        results = []
-        for i, tag in enumerate(soup.select("a.iusc")):
-            if i >= max_results: break
-            m_data = tag.get("m")
-            if m_data:
-                try:
-                    json_data = json.loads(m_data)
-                    image_url = json_data.get("murl")
-                    if image_url and is_high_quality_image(image_url):
-                        results.append({
-                            "type": "image_search_result",
-                            "title": json_data.get("t", "Image"),
-                            "thumbnail_url": json_data.get("turl"),
-                            "image_url": image_url,
-                            "source_url": json_data.get("purl", url)
-                        })
-                except Exception as e:
-                    print(f"[Bing Images] Error processing image tag: {e}")
-        print(f"[Bing Images] Found {len(results)} high-quality images.")
-        return results
-    except Exception as e:
-        print(f"[Bing Images] Bing image search error: {e}")
-        return []
-
-
-def get_youtube_transcript(video_url):
-    try:
-        video_id_match = re.search(r'(?:v=|\/|embed\/|youtu.be\/)([a-zA-Z0-9_-]{11})', video_url)
-        if not video_id_match:
-            return None, "Could not extract video ID from URL."
-        video_id = video_id_match.group(1)
-
-        ytt_api = YouTubeTranscriptApi()
-        transcript_list = ytt_api.list(video_id)
-
-        transcript = None
-        try:
-            transcript = transcript_list.find_manually_created_transcript(['en'])
-        except Exception:
-            try:
-                transcript = transcript_list.find_generated_transcript(['en'])
-            except Exception:
-                transcript = next(iter(transcript_list))
-
-        transcript_data = transcript.fetch()
-        
-        full_transcript = " ".join([item.text for item in transcript_data])
-        print(f"[YouTube Transcript] Fetched transcript of length: {len(full_transcript)} characters.")
-        return full_transcript, None
-    except Exception as e:
-        print(f"YouTube Transcript API error: {e}")
-        return None, str(e)
 
 def get_current_datetime_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")

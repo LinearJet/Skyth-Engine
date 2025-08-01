@@ -22,10 +22,10 @@ from tools import (
     plan_research_steps_with_llm, reformulate_query_with_context,
     _generate_and_yield_suggestions, call_llm, get_persona_prompt_name,
     extract_ticker_with_llm, _extract_time_range, generate_stock_chart_html,
-    get_youtube_transcript, parse_with_bs4, setup_selenium_driver, parse_url_comprehensive,
+    setup_selenium_driver,
     is_high_quality_image, get_filename_from_url, _select_relevant_images_for_prompt,
     generate_canvas_visualization, _create_error_html_page, _generate_pdf_from_html_selenium,
-    _create_image_gallery_html, scrape_bing_images, scrape_google_images,
+    _create_image_gallery_html,
     generate_image_from_pollinations,
     route_query_to_pipeline, analyze_academic_intent_with_llm, generate_html_preview
 )
@@ -200,7 +200,9 @@ def run_youtube_video_pipeline(query, persona_name, api_key, model_config, chat_
         return
         
     video_url = url_match.group(0)
-    transcript, error = get_youtube_transcript(video_url)
+    result = registry.execute_tool("youtube_transcript_getter", video_url=video_url)
+    transcript = result.get("transcript")
+    error = result.get("error")
 
     if error:
         yield yield_data('step', {'status': 'error', 'text': f'Transcript error: {error}'})
@@ -337,78 +339,41 @@ def run_image_editing_pipeline(query, persona_name, api_key, model_config, chat_
     final_data['artifacts'].append(source_artifact)
     yield yield_data('uploaded_image', {"base64_data": image_data, "title": "Source Image for Edit"})
 
-    try:
-        if not IMAGE_GENERATION_API_KEY:
-            raise ValueError("GEMINI_API_KEY for image generation is not configured.")
+    yield yield_data('step', {'status': 'thinking', 'text': f'Applying edit: "{query[:40]}..."'})
+    
+    edit_result = registry.execute_tool("image_editor", prompt=query, image_data=image_data)
 
-        from google import genai as google_genai
-        from google.genai import types as google_types
-        from PIL import Image as PIL_Image
-        from io import BytesIO as IO_BytesIO
-
-        image_client = google_genai.Client(api_key=IMAGE_GENERATION_API_KEY)
+    if "error" not in edit_result:
+        edited_image_base64 = edit_result['base64_data']
+        text_response_from_model = edit_result['text_response']
         
-        image_bytes = base64.b64decode(image_data)
-        source_image = PIL_Image.open(IO_BytesIO(image_bytes))
-
-        yield yield_data('step', {'status': 'thinking', 'text': f'Applying edit: "{query[:40]}..."'})
-
-        response = image_client.models.generate_content(
-            model=IMAGE_GENERATION_MODEL,
-            contents=[query, source_image],
-            config=google_types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE'])
-        )
-
-        edited_image_bytes = None
-        text_response_from_model = "The image has been edited as you requested."
-
-        for part in response.candidates[0].content.parts:
-          if part.text is not None:
-            text_response_from_model = part.text
-          elif part.inline_data is not None:
-            edited_image_bytes = part.inline_data.data
+        edited_artifact = {"type": "image", "content": edited_image_base64, "title": "Edited Image"}
+        final_data['artifacts'].append(edited_artifact)
+        yield yield_data('edited_image', {"base64_data": edited_image_base64, "prompt": query, "title": "Edited Image"})
+        yield yield_data('step', {'status': 'done', 'text': 'Edit applied successfully.'})
         
-        if edited_image_bytes:
-            edited_image_base64 = base64.b64encode(edited_image_bytes).decode('utf-8')
-            edited_artifact = {"type": "image", "content": edited_image_base64, "title": "Edited Image"}
-            final_data['artifacts'].append(edited_artifact)
-            yield yield_data('edited_image', {"base64_data": edited_image_base64, "prompt": query, "title": "Edited Image"})
-            yield yield_data('step', {'status': 'done', 'text': 'Edit applied successfully.'})
-            
-            # **FIX**: Create an explicit acknowledgment prompt
-            ack_prompt = f"You have just successfully edited the user's image with the instruction: '{query}'. The edited image is now displayed. Briefly acknowledge this success. You can also use the model's response if it's relevant: '{text_response_from_model}'"
-            stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name)
-            
-            full_response_content = ""
-            for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
-                full_response_content += json.loads(chunk[6:])['data']
-                yield chunk
-            final_data['content'] = full_response_content
-            
-        else:
-            error_msg = text_response_from_model or "The model did not return an edited image. It might have refused the request."
-            yield yield_data('step', {'status': 'error', 'text': error_msg})
-            final_data['content'] = f"I'm sorry, I couldn't edit the image. The model said: \"{error_msg}\""
-            yield yield_data('answer_chunk', final_data['content'])
-
-    except TypeError as e:
-        error_msg = f"An error occurred during image editing: The image data was missing. This can happen if an image wasn't uploaded in the current session. Please upload the image again to edit it. (Error: {str(e)})"
-        print(f"[Image Editing Pipeline] {error_msg}")
-        yield yield_data('step', {'status': 'error', 'text': 'An error occurred during editing.'})
-        final_data['content'] = error_msg
-        yield yield_data('answer_chunk', error_msg)
-    except Exception as e:
-        error_msg = f"An error occurred during image editing: {str(e)}"
-        print(f"[Image Editing Pipeline] {error_msg}")
-        yield yield_data('step', {'status': 'error', 'text': 'An error occurred during editing.'})
-        final_data['content'] = error_msg
-        yield yield_data('answer_chunk', error_msg)
+        ack_prompt = f"You have just successfully edited the user's image with the instruction: '{query}'. The edited image is now displayed. Briefly acknowledge this success. You can also use the model's response if it's relevant: '{text_response_from_model}'"
+        stream_response_ack = call_llm(ack_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=True, chat_history=chat_history, persona_name=persona_name)
+        
+        full_response_content = ""
+        for chunk in _stream_llm_response(stream_response_ack, CONVERSATIONAL_MODEL):
+            full_response_content += json.loads(chunk[6:])['data']
+            yield chunk
+        final_data['content'] = full_response_content
+        
+    else:
+        error_msg = edit_result.get('error', "An unknown error occurred during image editing.")
+        yield yield_data('step', {'status': 'error', 'text': error_msg})
+        final_data['content'] = f"I'm sorry, I couldn't edit the image. The model said: \"{error_msg}\""
+        yield yield_data('answer_chunk', final_data['content'])
 
     yield yield_data('final_response', final_data)
     yield yield_data('step', {'status': 'done', 'text': 'Image editing process complete.'})
 
 def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_history, query_profile_type, custom_persona_text, persona_key, **kwargs):
     file_data = kwargs.get('file_data')
+    file_name = kwargs.get('file_name')
+    
     if not file_data:
         yield yield_data('step', {'status': 'info', 'text': 'No file context found. To discuss a file, please upload it first.'})
         error_content = "It seems you're asking about a file, but I don't have one in our current conversation. Please upload the file you'd like to discuss."
@@ -419,33 +384,11 @@ def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_
         return
 
     final_data = { "content": "", "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
-    file_name = kwargs.get('file_name')
-    import pypdf
     yield yield_data('step', {'status': 'thinking', 'text': f'Processing file context: {file_name}'})
 
-    file_content = ""
-    error_message = None
-
-    try:
-        decoded_bytes = base64.b64decode(file_data)
-        
-        if file_name and file_name.lower().endswith('.pdf'):
-            pdf_reader = pypdf.PdfReader(io.BytesIO(decoded_bytes))
-            content_parts = [page.extract_text() for page in pdf_reader.pages]
-            file_content = "\n\n".join(content_parts)
-            if not file_content.strip():
-                error_message = "Could not extract text from this PDF. It may be an image-based PDF."
-        else:
-            try:
-                file_content = decoded_bytes.decode('utf-8')
-            except UnicodeDecodeError:
-                file_content = decoded_bytes.decode('latin-1', errors='replace')
-            if not file_content.strip():
-                 error_message = "File appears to be empty or in an unreadable binary format."
-
-    except Exception as e:
-        print(f"File processing error for {file_name}: {e}")
-        error_message = f"An error occurred while processing the file: {str(e)}"
+    parse_result = registry.execute_tool("file_parser", file_data=file_data, file_name=file_name)
+    file_content = parse_result.get("text_content")
+    error_message = parse_result.get("error")
 
     if error_message:
         yield yield_data('step', {'status': 'error', 'text': error_message})
@@ -468,7 +411,6 @@ def run_file_analysis_pipeline(query, persona_name, api_key, model_config, chat_
         if 'final_suggestions' in json.loads(suggestion_chunk[6:])['data']:
             final_data['suggestions'] = json.loads(suggestion_chunk[6:])['data']['final_suggestions']
 
-    # **FIX**: Create a more explicit prompt to prevent context confusion from previous turns.
     prompt_content = f"""CRITICAL INSTRUCTION: Your primary task is to answer the user's query based *only* on the provided file content. Ignore any unrelated topics from the recent conversation history.
 
 User's query about the file: "{query}"
@@ -502,38 +444,12 @@ def run_image_search_pipeline(query, persona_name, api_key, model_config, chat_h
         match = re.search(p, search_query, re.IGNORECASE)
         if match: search_term = match.group(1).strip(); break
 
-    google_results = []
-    bing_results = []
-    driver = None
-    try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            bing_future = executor.submit(scrape_bing_images, search_term)
-            google_future = None
-            
-            driver = setup_selenium_driver()
-            if driver:
-                google_future = executor.submit(scrape_google_images, driver, search_term)
-            else:
-                yield yield_data('step', {'status': 'warning', 'text': 'Selenium driver failed, skipping Google Images.'})
-            
-            if google_future:
-                google_results = google_future.result()
-            
-            bing_results = bing_future.result()
-
-        all_results = google_results + bing_results
-    finally:
-        if driver:
-            driver.quit()
-            print("[Selenium] Driver instance for image search has been closed.")
+    unique_results = registry.execute_tool("image_searcher", query=search_term)
     
-    unique_results = list({v['image_url']:v for v in all_results}.values())
-
     if unique_results:
         final_data['imageResults'] = unique_results
         yield yield_data('image_search_results', unique_results)
         yield yield_data('step', {'status': 'done', 'text': 'High-quality image search results provided.'})
-        # **FIX**: Create an explicit acknowledgment prompt
         ack_prompt_content = f"You have just successfully performed an image search for '{search_term}' and the results are now displayed to the user. Briefly acknowledge this accomplishment and ask if the user wants to do anything else with these images or ask another question."
     else:
         yield yield_data('step', {'status': 'info', 'text': f'No relevant high-quality images found for "{search_term}".'})
@@ -560,27 +476,19 @@ def run_url_deep_parse_pipeline(query, persona_name, api_key, model_config, chat
     url_to_parse = url_match.group(0)
     yield yield_data('step', {'status': 'searching', 'text': f'Analyzing URL: {url_to_parse[:60]}...'})
     
-    parsed_data = parse_with_bs4(url_to_parse)
+    parsed_data = registry.execute_tool("url_parser", url=url_to_parse)
 
-    if not parsed_data or len(parsed_data.get('text_content', '')) < 500:
-        yield yield_data('step', {'status': 'info', 'text': 'Basic analysis insufficient, engaging deep browser-based scraping...'})
-        driver = setup_selenium_driver()
-        if not driver:
-            yield yield_data('step', {'status': 'error', 'text': 'Browser driver could not be initialized for analysis.'})
-            error_content = "I'm sorry, I was unable to start the browser driver needed to analyze that URL."
-            yield yield_data('answer_chunk', error_content)
-            final_data['content'] = error_content
-            yield yield_data('final_response', final_data)
-            yield yield_data('step', {'status': 'done', 'text': 'Analysis aborted.'})
-            return
-        
-        try:
-            parsed_data = parse_url_comprehensive(driver, url_to_parse)
-        finally:
-            driver.quit()
-            print(f"[Selenium] Driver for URL parse of {url_to_parse} has been closed.")
-    else:
-        yield yield_data('step', {'status': 'info', 'text': 'Fast analysis complete.'})
+    if not parsed_data or parsed_data.get("error"):
+        error_msg = parsed_data.get("error", "Failed to parse the URL.")
+        yield yield_data('step', {'status': 'error', 'text': error_msg})
+        error_content = f"I'm sorry, I was unable to analyze that URL. The error was: {error_msg}"
+        yield yield_data('answer_chunk', error_content)
+        final_data['content'] = error_content
+        yield yield_data('final_response', final_data)
+        yield yield_data('step', {'status': 'done', 'text': 'Analysis aborted.'})
+        return
+
+    yield yield_data('step', {'status': 'info', 'text': f"Analysis via '{parsed_data.get('source_parser')}' complete."})
 
     if parsed_data.get('images'):
         high_quality_images = [{"type": "image_search_result", "title": f"High-quality image from {parsed_data['domain']}", "thumbnail_url": img, "image_url": img, "source_url": url_to_parse} for img in parsed_data['images'] if is_high_quality_image(img)]
@@ -665,15 +573,15 @@ def run_deep_research_pipeline(query, persona_name, api_key, model_config, chat_
         for i, url in enumerate(urls_to_scan):
             yield yield_data('step', {'status': 'searching', 'text': f'Analyzing source {i+1}/{len(urls_to_scan)}: {urlparse(url).netloc}'})
             try:
-                data = parse_with_bs4(url)
-                if not data or len(data.get('text_content', '')) < 500:
-                    yield yield_data('step', {'status': 'info', 'text': f'Using deep scrape for: {urlparse(url).netloc}'})
-                    data = parse_url_comprehensive(driver, url)
-                all_scraped_content.append(data)
+                data = registry.execute_tool("url_parser", url=url, driver=driver)
+                if data and not data.get("error"):
+                    all_scraped_content.append(data)
+                else:
+                    yield yield_data('step', {'status': 'warning', 'text': f'Skipping source {i+1} due to parsing error.'})
             except Exception as e:
                 yield yield_data('step', {'status': 'warning', 'text': f'Skipping source {i+1} due to error: {e}'})
     finally:
-        pass
+        pass # Driver is closed at the end of the pipeline
 
     yield yield_data('step', {'status': 'thinking', 'text': 'Identifying visualization & image opportunities...'})
     

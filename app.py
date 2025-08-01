@@ -16,7 +16,7 @@ from tinydb import Query
 from config import app, DATABASE, CONVERSATIONAL_MODEL, REASONING_MODEL, VISUALIZATION_MODEL, CONVERSATIONAL_API_KEY, REASONING_API_KEY, VISUALIZATION_API_KEY, UTILITY_API_KEY, UTILITY_MODEL, EDGE_TTS_VOICE_MAPPING, CATEGORIES, ARTICLE_LIST_CACHE_DURATION, CACHE, oauth, USER_DB
 from tools import (
     get_persona_prompt_name, route_query_to_pipeline, get_trending_news_topics,
-    parse_with_bs4, get_article_content_tiered,
+    get_article_content_tiered,
     setup_selenium_driver, call_llm
 )
 from pipelines import (
@@ -35,9 +35,13 @@ from default import run_default_pipeline
 from unhinged import run_unhinged_pipeline
 from custom import run_custom_pipeline
 from tools_plugins.web_search_tool import WebSearchTool
+from tool_registry import ToolRegistry
 
 # Apply CORS to the app object from config
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Instantiate the tool registry for use in API endpoints
+registry = ToolRegistry()
 
 # ==============================================================================
 # AI UTILITY FUNCTIONS (REFACTORED)
@@ -410,8 +414,8 @@ def parse_article_endpoint():
     except Exception as e:
         print(f"[Article Parser API] Trafilatura failed for {url}: {e}")
 
-    print(f"[Article Parser API] Trafilatura insufficient, falling back to BS4 for: {url}")
-    parsed_data = parse_with_bs4(url)
+    print(f"[Article Parser API] Trafilatura insufficient, falling back to url_parser tool for: {url}")
+    parsed_data = registry.execute_tool("url_parser", url=url)
     if parsed_data and parsed_data.get('text_content'):
         cleaned_text = '\n\n'.join(chunk for chunk in (phrase.strip() for line in parsed_data['text_content'].splitlines() for phrase in line.split("  ")) if chunk)
         response_data = {
@@ -802,12 +806,12 @@ if __name__ == '__main__':
     from tools import get_current_datetime_str
     init_db()
 
-    print(f"🚀 SKYTH ENGINE v10.4 (Robust DB & Context) - Running with current date: {get_current_datetime_str()}")
+    print(f"🚀 SKYTH ENGINE v10.5 (Plugin Tools) - Running with current date: {get_current_datetime_str()}")
     print(f"   Conversational Model: {CONVERSATIONAL_MODEL}")
     print(f"   Reasoning Model: {REASONING_MODEL} (Reserved for Coding & Deep Research)")
     print(f"   Visualization Model: {VISUALIZATION_MODEL}")
     print(f"   Utility/Routing Model: {UTILITY_MODEL}")
     print(f"   Image Generation/Editing Model: {os.getenv('IMAGE_GENERATION_MODEL', 'gemini-2.0-flash-preview-image-generation')}")
-    print("   Features: Robust DB initialization, persistent file/image context, LLM-based query routing.")
+    print("   Features: Modular tool plugins, robust DB initialization, persistent file/image context, LLM-based query routing.")
     print("🌐 Server running on http://127.0.0.1:5000")
     app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
