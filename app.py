@@ -24,7 +24,8 @@ from pipelines import (
     run_html_pipeline, run_standard_research,
     run_deep_research_pipeline, run_image_analysis_pipeline,
     run_file_analysis_pipeline,
-    run_stock_pipeline, yield_data, run_generic_tool_pipeline
+    run_stock_pipeline, yield_data, run_generic_tool_pipeline,
+    run_agent_pipeline  # <-- IMPORT THE NEW AGENT PIPELINE
 )
 from academic import run_academic_pipeline
 from coding import run_coding_pipeline
@@ -243,7 +244,7 @@ def search(): # This is now a REGULAR function, not a generator
             "default": run_default_pipeline,
             "unhinged": run_unhinged_pipeline,
             "custom": run_custom_pipeline,
-            "agent": run_default_pipeline, # Placeholder for agent pipeline
+            "agent": run_agent_pipeline, # <-- THE CHANGE: Point 'agent' to the new pipeline
         }
 
         # The "Plug-and-Play" Logic

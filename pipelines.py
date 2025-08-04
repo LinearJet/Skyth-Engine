@@ -29,6 +29,8 @@ from tools import (
     generate_image_from_pollinations,
     route_query_to_pipeline, analyze_academic_intent_with_llm, generate_html_preview
 )
+# Import the new Agent class
+from agent import Agent
 
 registry = ToolRegistry()
 
@@ -36,6 +38,26 @@ registry = ToolRegistry()
 # PIPELINE STREAMING FUNCTIONS
 # ==============================================================================
 from utils import yield_data, _stream_llm_response
+
+
+# ==============================================================================
+# AGENTIC PIPELINE (NEW)
+# ==============================================================================
+def run_agent_pipeline(query, persona_name, api_key, model_config, chat_history, query_profile_type, custom_persona_text, persona_key, **kwargs):
+    """
+    Initializes and runs the autonomous agent with thinking and tool-use capabilities.
+    """
+    yield yield_data('step', {'status': 'info', 'text': 'Activating Agentic Mode...'})
+    try:
+        # The agent uses the high-capability reasoning model and its corresponding API key
+        agent = Agent(api_key=REASONING_API_KEY, tools=registry.get_all_tools())
+        yield from agent.run(query, chat_history)
+    except Exception as e:
+        error_msg = f"Failed to initialize or run the agent: {e}"
+        yield yield_data('step', {'status': 'error', 'text': error_msg})
+        final_data = { "content": error_msg, "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+        yield yield_data('final_response', final_data)
+        yield yield_data('step', {'status': 'done', 'text': 'Agent failed.'})
 
 
 # ==============================================================================
@@ -88,19 +110,20 @@ def run_generic_tool_pipeline(query, persona_name, api_key, model_config, chat_h
         'image_search_results': {'ui_event': 'image_search_results', 'data_key': 'imageResults', 'is_list': False},
         'video_search_results': {'ui_event': 'video_search_results', 'data_key': 'videoResults', 'is_list': False},
         'web_search_results': {'ui_event': 'sources', 'data_key': 'sources', 'is_list': False},
+        'downloadable_file': {'ui_event': 'downloadable_file', 'data_key': 'artifacts', 'is_list': True},
     }
     
     mapping = output_mapping.get(tool.output_type)
     if mapping:
         yield yield_data(mapping['ui_event'], result)
         if mapping['is_list']:
-            # For single items like generated images, the result is a dict. We wrap it in a list.
             final_data[mapping['data_key']].append(result)
         else:
             final_data[mapping['data_key']] = result
+    else:
+        print(f"Tool '{tool_name}' returned unmapped output type '{tool.output_type}'. Handling as generic content.")
+        final_data['content'] = f"Tool {tool_name} executed successfully.\n\n<pre>{json.dumps(result, indent=2)}</pre>"
 
-    # --- THE FIX IS HERE ---
-    # The LLM now receives the tool's output to formulate a smart response.
     result_str = json.dumps(result, indent=2)
     if len(result_str) > 2000:
         result_str = result_str[:2000] + "\n... (result truncated)"
@@ -119,7 +142,7 @@ def run_generic_tool_pipeline(query, persona_name, api_key, model_config, chat_h
     - **DO:** Directly state the key information from the result. For example, if the tool counted words, say "The phrase has 9 words." If it reversed text, say "The reversed text is '...'"
     - **DO NOT:** Talk about the tool itself (e.g., "I have executed the text_utility tool.").
     - **DO NOT:** Output the raw JSON data.
-    - **DO NOT:** Say that the results are "displayed". Instead, present the results in your own words. For visual tools like image generation, you can say "Here is the image you requested."
+    - **DO NOT:** Say that the results are "displayed". Instead, present the results in your own words. For visual tools like image generation or downloadable files, you can say "Here is the file you requested." or "I've created the image for you."
     - Conclude with a helpful follow-up, like "What would you like to do next?".
 
     Your response:

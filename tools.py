@@ -457,7 +457,7 @@ def generate_canvas_visualization(query, context_data="", visualization_type="ge
 def generate_html_preview(user_request_or_code):
     html_preview_prompt = f"""
     User request: '{user_request_or_code}'
-    Task: Create a complete, self-contained HTML5 document for an iframe.
+    Task: Create a complete, self-contained, HTML5 document for an iframe.
     If the user provided code, display it clearly, perhaps with basic syntax highlighting if possible with inline CSS/JS.
     If the user asked for a simple HTML element (e.g., "a styled button", "a small form"), create that element.
     Theme: Dark (background #111827, text #d1d5db).
@@ -613,7 +613,7 @@ def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_
         {"name": "stock_query", "description": "Retrieves live stock data and generates an interactive chart for a specific stock ticker.", "parameters": []},
         {"name": "visualization_request", "description": "Generates an interactive HTML5 canvas visualization for data, math, or physics concepts.", "parameters": []},
         {"name": "academic_pipeline", "description": "Use when the 'academic' persona is active. Provides structured, sourced answers for academic queries.", "parameters": []},
-        {"name": "agent", "description": "A placeholder for a future agentic system. Use when agent mode is active.", "parameters": []},
+        {"name": "agent", "description": "Activates an autonomous agent that can use multiple tools to solve complex, multi-step problems. Use this for complex requests that require planning, such as 'Research X, then create a file with the summary'.", "parameters": []},
     ]
 
     # Combine tools and specialized pipelines for the router's consideration

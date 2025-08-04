@@ -198,6 +198,8 @@
             padding: 12px 15px 8px; position: relative; cursor: pointer; 
             overflow: hidden; transition: transform 0.2s ease-out, box-shadow 0.2s ease-out; 
             margin: 5px 0; max-width: 100%;
+            text-decoration: none; /* For downloadable links */
+            display: block; /* For downloadable links */
         }
         .artifact-thumbnail-container:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.4); }
         .artifact-thumbnail-container::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #252529; border-radius: 16px; transform: translateY(10px); z-index: 1; }
@@ -206,7 +208,6 @@
             border-radius: 12px; padding: 10px 12px; 
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             overflow: hidden;
-            /* FIX: Hard constraint to prevent long content from breaking layout */
             display: table;
             table-layout: fixed;
             width: 100%;
@@ -219,6 +220,7 @@
             overflow: hidden;
             text-overflow: ellipsis;
             min-width: 0;
+            color: var(--primary-text-color); /* Ensure text color is consistent */
         }
         .artifact-thumbnail-header i { color: var(--secondary-text-color); flex-shrink: 0; }
         .artifact-thumbnail-code {
@@ -256,7 +258,6 @@
             font-size: 14px;
             line-height: 1.6;
             height: 100%;
-            /* FIX: Removed wrapping to allow horizontal scrolling for real code */
         }
         #artifact-iframe { width: 100%; height: 100%; border: none; background-color: #fff; }
 
@@ -784,17 +785,21 @@ document.addEventListener('DOMContentLoaded', () => {
                                 contentWrapper.insertBefore(createArtifactThumbnail(artifact.type, artifact.content, artifact.title), streamingTextElement);
                                 break;
                             }
+                            case 'downloadable_file': { // <-- THE FIX IS HERE
+                                const artifactData = json.data;
+                                botMessageData.artifacts.push(artifactData);
+                                contentWrapper.insertBefore(createDownloadableArtifactThumbnail(artifactData), streamingTextElement);
+                                break;
+                            }
                             case 'image_search_results': botMessageData.imageResults = json.data; break;
                             case 'video_search_results': botMessageData.videoResults = json.data; break;
                             case 'final_response':
                                 const finalData = json.data;
-                                // FIX: Merge final data without overwriting existing arrays like suggestions
                                 botMessageData.content = finalData.content || botMessageData.content;
                                 if (finalData.artifacts) botMessageData.artifacts = [...botMessageData.artifacts, ...finalData.artifacts];
                                 if (finalData.sources) botMessageData.sources = finalData.sources;
                                 if (finalData.imageResults) botMessageData.imageResults = finalData.imageResults;
                                 if (finalData.videoResults) botMessageData.videoResults = finalData.videoResults;
-                                // Importantly, do NOT overwrite suggestions if they already exist.
                                 if (finalData.suggestions && botMessageData.suggestions.length === 0) {
                                     botMessageData.suggestions = finalData.suggestions;
                                 }
@@ -830,7 +835,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (messageData.artifacts && messageData.artifacts.length > 0) {
             messageData.artifacts.forEach(artifact => {
-                contentWrapper.appendChild(createArtifactThumbnail(artifact.type, artifact.content, artifact.title));
+                if (artifact.type === 'downloadable_file') {
+                    contentWrapper.appendChild(createDownloadableArtifactThumbnail(artifact));
+                } else {
+                    contentWrapper.appendChild(createArtifactThumbnail(artifact.type, artifact.content, artifact.title));
+                }
             });
         }
         
@@ -1039,6 +1048,21 @@ document.addEventListener('DOMContentLoaded', () => {
         return container;
     }
 
+    function createDownloadableArtifactThumbnail(artifactData) {
+        const container = document.createElement('a'); // Use an anchor tag for downloads
+        container.className = 'artifact-thumbnail-container';
+        container.href = artifactData.data_uri;
+        container.download = artifactData.filename;
+        
+        const iconClass = 'fa-solid fa-file-arrow-down';
+        const title = artifactData.title || `Download: ${artifactData.filename}`;
+        const previewText = `MIME Type: ${artifactData.mime_type}`;
+
+        container.innerHTML = `<div class="artifact-thumbnail-card"><div class="artifact-thumbnail-header"><span>${escapeHtml(title)}</span><i class="${iconClass}"></i></div><div class="artifact-thumbnail-code">${escapeHtml(previewText)}</div></div>`;
+        
+        return container;
+    }
+
     function showArtifact(artifactData) {
         currentArtifact = artifactData;
         const { type, content, title } = artifactData;
@@ -1051,7 +1075,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setArtifactViewMode('interactive');
             artifactViewToggles.style.display = 'none';
         } else if (type === 'html') {
-            artifactCodeBlock.className = 'language-html'; // FIX: Explicitly set language for highlighting
+            artifactCodeBlock.className = 'language-html';
             artifactCodeBlock.textContent = content;
             hljs.highlightElement(artifactCodeBlock);
             artifactIframe.srcdoc = content;
