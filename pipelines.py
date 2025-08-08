@@ -87,6 +87,8 @@ def run_generic_tool_pipeline(query, persona_name, api_key, model_config, chat_h
     if 'file_data' in (p['name'] for p in tool.parameters):
         tool_params['file_data'] = kwargs.get('file_data')
         tool_params['file_name'] = kwargs.get('file_name')
+    if 'chat_id' in (p['name'] for p in tool.parameters):
+        tool_params['chat_id'] = kwargs.get('chat_id')
 
     try:
         result = registry.execute_tool(tool_name, **tool_params)
@@ -111,6 +113,7 @@ def run_generic_tool_pipeline(query, persona_name, api_key, model_config, chat_h
         'video_search_results': {'ui_event': 'video_search_results', 'data_key': 'videoResults', 'is_list': False},
         'web_search_results': {'ui_event': 'sources', 'data_key': 'sources', 'is_list': False},
         'downloadable_file': {'ui_event': 'downloadable_file', 'data_key': 'artifacts', 'is_list': True},
+        
     }
     
     mapping = output_mapping.get(tool.output_type)
