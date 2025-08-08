@@ -160,7 +160,19 @@ class ContextTool(BaseTool):
         try:
             transcript_text = self._fetch_youtube_transcript(url)
             if not transcript_text:
-                return {"error": "Could not retrieve transcript for this YouTube video."}
+                # Fallback: scrape basic metadata (title/description)
+                meta = self._scrape_youtube_metadata(url)
+                if not meta:
+                    return {"error": "Could not retrieve transcript or metadata for this YouTube video."}
+                q = prompt or "Summarize the video based on its title and description, and note that no transcript was available."
+                context = []
+                if meta.get("title"): context.append(f"Title: {meta['title']}")
+                if meta.get("description"): context.append(f"Description: {meta['description'][:800]}")
+                full_prompt = f"Video URL: {url}\n\n{'\n\n'.join(context)}\n\nTask: {q}"
+                llm_resp = call_llm(full_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=False)
+                text = llm_resp.json()["candidates"][0]["content"]["parts"][0].get("text", "").strip()
+                return {"action": "analyze_youtube", "url": url, "answer": text, "note": "Transcript not available; used metadata."}
+
             q = prompt or "Summarize the key points and answer likely questions about this video."
             full_prompt = f"Video URL: {url}\n\nTranscript (truncated to 12k chars):\n{transcript_text[:12000]}\n\nTask: {q}"
             llm_resp = call_llm(full_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=False)
@@ -175,8 +187,73 @@ class ContextTool(BaseTool):
             video_id = self._extract_youtube_id(url)
             if not video_id:
                 return None
-            transcripts = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-            return "\n".join(item.get('text', '') for item in transcripts if item.get('text'))
+            # Robust transcript discovery with fallbacks
+            try:
+                transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
+            except Exception:
+                # Some environments use instance call variant
+                transcripts = YouTubeTranscriptApi().list(video_id)
+
+            transcript = None
+            try:
+                transcript = transcripts.find_manually_created_transcript(['en', 'en-US', 'en-GB'])
+            except Exception:
+                try:
+                    transcript = transcripts.find_generated_transcript(['en', 'en-US', 'en-GB'])
+                except Exception:
+                    # Try first available transcript and translate to English if possible
+                    try:
+                        first = next(iter(transcripts))
+                        try:
+                            transcript = first.translate('en')
+                        except Exception:
+                            transcript = first
+                    except Exception:
+                        transcript = None
+
+            if not transcript:
+                return None
+
+            data = transcript.fetch()
+            return "\n".join(item.get('text', '') for item in data if item.get('text'))
+        except Exception:
+            # Final fallback: direct get_transcript with broad language list
+            try:
+                data = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'en-US', 'en-GB', 'es', 'fr', 'de'])
+                return "\n".join(item.get('text', '') for item in data if item.get('text'))
+            except Exception:
+                return None
+
+    def _scrape_youtube_metadata(self, url: str) -> Optional[Dict[str, str]]:
+        try:
+            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            html = resp.text
+            soup = BeautifulSoup(html, 'html.parser')
+            title = None
+            desc = None
+            # Try Open Graph
+            og_title = soup.find('meta', property='og:title')
+            if og_title and og_title.get('content'): title = og_title['content']
+            og_desc = soup.find('meta', property='og:description')
+            if og_desc and og_desc.get('content'): desc = og_desc['content']
+            # Try standard meta
+            if not title:
+                mt = soup.find('meta', attrs={'name': 'title'})
+                if mt and mt.get('content'): title = mt['content']
+            if not desc:
+                md = soup.find('meta', attrs={'name': 'description'})
+                if md and md.get('content'): desc = md['content']
+            # Try ytInitialPlayerResponse.shortDescription via regex
+            if not desc:
+                import re
+                m = re.search(r'"shortDescription":"(.*?)"', html, re.DOTALL)
+                if m:
+                    desc = m.group(1).encode('utf-8').decode('unicode_escape')
+                    desc = desc.replace('\\n', '\n')
+            if title or desc:
+                return {"title": title or "", "description": desc or ""}
+            return None
         except Exception:
             return None
 
