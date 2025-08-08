@@ -35,7 +35,7 @@ SKYTH is packed with features that go beyond a simple chatbot, creating a versat
 -   **📰 Discover Page:** A built-in news aggregator that scrapes and displays articles from various categories, with a personalized "For You" section that learns from user interactions.
 -   **👤 User-Centric Experience:**
     -   **Personas:** Switch between different AI personalities (e.g., `Academic`, `Coding`, `Unhinged`) for tailored responses.
-    -   **Full Chat Management:** Secure user authentication (Google OAuth) with persistent, renameable, and deletable chat histories stored in a local SQLite database.
+    -   **Full Chat Management:** Persistent, renameable, and deletable chat histories stored in a local SQLite database. (OAuth temporarily disabled; app runs with a guest session.)
 
 ---
 
@@ -53,7 +53,7 @@ SKYTH is packed with features that go beyond a simple chatbot, creating a versat
 | **Stock Data**    | `Node.js`, `yahoo-finance2`                                                                                                    |
 | **Audio**         | `edge-tts` (TTS), `SpeechRecognition` & `pydub` (Transcription)                                                                |
 | **File Parsing**  | `pypdf` (PDFs)                                                                                                                 |
-| **Authentication**| `Authlib` (Google OAuth)                                                                                                       |
+| **Authentication**| (Temporarily disabled OAuth; uses guest session)                                                                                                       |
 
 ---
 
@@ -108,9 +108,7 @@ Follow these steps to get your own instance of the SKYTH Engine running locally.
     SECRET_KEY=generate-a-super-secret-random-string-here
     PORT=5000
     
-    # For Google OAuth (Optional, but required for user login)
-    GOOGLE_CLIENT_ID=your-google-client-id
-    GOOGLE_CLIENT_SECRET=your-google-client-secret
+    # OAuth temporarily disabled; no Google credentials required
     ```
 
 ### Running the Application

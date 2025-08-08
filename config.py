@@ -2,7 +2,6 @@ import os
 from flask import Flask
 from dotenv import load_dotenv
 from threading import Lock
-from authlib.integrations.flask_client import OAuth
 from tinydb import TinyDB
 from flask_session import Session
 
@@ -27,19 +26,10 @@ USER_DB = TinyDB('user_db.json')
 
 
 # ==============================================================================
-# OAUTH SETUP
+# SESSION SETUP (OAuth removed)
 # ==============================================================================
 Session(app)
-oauth = OAuth(app)
-google = oauth.register(
-    name='google',
-    client_id=app.config['GOOGLE_CLIENT_ID'],
-    client_secret=app.config['GOOGLE_CLIENT_SECRET'],
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={
-        'scope': 'openid email profile'
-    }
-)
+
 # --- MODEL CONFIGURATION ---
 CONVERSATIONAL_MODEL = os.getenv("CONVERSATIONAL_MODEL", "gemini/gemini-2.5-flash-lite")
 VISUALIZATION_MODEL = os.getenv("VISUALIZATION_MODEL", "gemini/gemini-2.5-flash")

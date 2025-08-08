@@ -79,9 +79,9 @@
 </head>
 <body>
     <div class="profile-container">
-        <img src="{{ user.picture }}" alt="Profile Picture" class="profile-picture">
-        <h1>{{ user.name }}</h1>
-        <p class="user-email">{{ user.email }}</p>
+        <img src="{{ user.picture or 'https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y' }}" alt="Profile Picture" class="profile-picture">
+        <h1>{{ user.name or 'Guest User' }}</h1>
+        <p class="user-email">{{ user.email or 'guest@local' }}</p>
         <div class="action-links">
             <a href="/"><i class="fa-solid fa-house"></i> Home</a>
             <a href="/logout" class="logout"><i class="fa-solid fa-right-from-bracket"></i> Logout</a>
