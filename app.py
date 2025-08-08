@@ -257,7 +257,8 @@ def search(): # This is now a REGULAR function, not a generator
 
         pipeline_kwargs = {
             "image_data": image_data, "file_data": file_data, "file_name": file_name,
-            "params": pipeline_params # Pass the router's params to the pipeline
+            "params": pipeline_params,  # Pass the router's params to the pipeline
+            "chat_id": chat_id
         }
 
         final_query = user_query # The generic pipeline gets the original query for its acknowledgment prompt
