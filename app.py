@@ -13,7 +13,7 @@ from flask import request, Response, stream_with_context, send_from_directory, r
 from flask_cors import CORS
 from tinydb import Query
 
-from config import app, DATABASE, CONVERSATIONAL_MODEL, REASONING_MODEL, VISUALIZATION_MODEL, CONVERSATIONAL_API_KEY, REASONING_API_KEY, VISUALIZATION_API_KEY, UTILITY_API_KEY, UTILITY_MODEL, EDGE_TTS_VOICE_MAPPING, CATEGORIES, ARTICLE_LIST_CACHE_DURATION, CACHE, oauth, USER_DB
+from config import app, DATABASE, CONVERSATIONAL_MODEL, REASONING_MODEL, VISUALIZATION_MODEL, CONVERSATIONAL_API_KEY, REASONING_API_KEY, VISUALIZATION_API_KEY, UTILITY_API_KEY, UTILITY_MODEL, EDGE_TTS_VOICE_MAPPING, CATEGORIES, ARTICLE_LIST_CACHE_DURATION, CACHE, USER_DB
 from tools import (
     get_persona_prompt_name, route_query_to_pipeline, get_trending_news_topics,
     get_article_content_tiered,
@@ -40,6 +40,23 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Instantiate the tool registry for use in API endpoints and the main search function
 registry = ToolRegistry()
+
+@app.before_request
+def ensure_guest_user():
+    if session.get('user') is None:
+        conn = get_db_connection()
+        user = conn.execute('SELECT * FROM users WHERE username = ?', ('guest@local',)).fetchone()
+        if user is None:
+            conn.execute('INSERT INTO users (username, password) VALUES (?, ?)', ('guest@local', 'guest'))
+            conn.commit()
+            user = conn.execute('SELECT * FROM users WHERE username = ?', ('guest@local',)).fetchone()
+        conn.close()
+        session['user'] = {
+            'id': user['id'],
+            'email': user['username'],
+            'name': 'Guest User',
+            'picture': 'https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y'
+        }
 
 # ==============================================================================
 # AI UTILITY FUNCTIONS (REFACTORED)
@@ -574,30 +591,23 @@ def track_interaction():
 # ==============================================================================
 @app.route('/login')
 def login():
-    redirect_uri = url_for('oauth2callback', _external=True)
-    return oauth.google.authorize_redirect(redirect_uri)
-    
-@app.route('/oauth2callback')
-def oauth2callback():
-    token = oauth.google.authorize_access_token()
-    nonce = session.get('nonce')
-    user_info = oauth.google.parse_id_token(token, nonce=nonce)
-    
+    # Create a guest user session (no OAuth)
     conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE username = ?', (user_info['email'],)).fetchone()
+    # Ensure a single shared guest user exists
+    user = conn.execute('SELECT * FROM users WHERE username = ?', ('guest@local',)).fetchone()
     if user is None:
-        conn.execute('INSERT INTO users (username, password) VALUES (?, ?)', (user_info['email'], 'dummy_password'))
+        conn.execute('INSERT INTO users (username, password) VALUES (?, ?)', ('guest@local', 'guest'))
         conn.commit()
-        user = conn.execute('SELECT * FROM users WHERE username = ?', (user_info['email'],)).fetchone()
+        user = conn.execute('SELECT * FROM users WHERE username = ?', ('guest@local',)).fetchone()
     conn.close()
-    
+
     session['user'] = {
         'id': user['id'],
         'email': user['username'],
-        'name': user_info.get('name'),
-        'picture': user_info.get('picture')
+        'name': 'Guest User',
+        'picture': 'https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y'
     }
-    
+
     return redirect('/')
     
 @app.route('/logout')
@@ -609,6 +619,7 @@ def logout():
 def profile():
     user = session.get('user')
     if not user:
+        # Auto-create guest on profile access
         return redirect('/login')
     return render_template('profile.html', user=user)
 
