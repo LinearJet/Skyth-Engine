@@ -113,16 +113,32 @@ def run_generic_tool_pipeline(query, persona_name, api_key, model_config, chat_h
         'video_search_results': {'ui_event': 'video_search_results', 'data_key': 'videoResults', 'is_list': False},
         'web_search_results': {'ui_event': 'sources', 'data_key': 'sources', 'is_list': False},
         'downloadable_file': {'ui_event': 'downloadable_file', 'data_key': 'artifacts', 'is_list': True},
+        'context_tool_result': {'ui_event': None, 'data_key': None, 'is_list': False},
         
     }
     
     mapping = output_mapping.get(tool.output_type)
     if mapping:
-        yield yield_data(mapping['ui_event'], result)
-        if mapping['is_list']:
-            final_data[mapping['data_key']].append(result)
+        if mapping['ui_event']:
+            yield yield_data(mapping['ui_event'], result)
+            if mapping['is_list']:
+                final_data[mapping['data_key']].append(result)
+            else:
+                final_data[mapping['data_key']] = result
         else:
-            final_data[mapping['data_key']] = result
+            # Special handling for context tool: surface 'answer' if present, attach artifacts/sources
+            answer_text = result.get('answer') or result.get('summary') or result.get('content')
+            if answer_text:
+                final_data['content'] = answer_text
+            # If the result contains structured items, pass them through for UI context
+            if 'artifacts' in result and isinstance(result['artifacts'], list):
+                final_data['artifacts'].extend(result['artifacts'])
+            if 'sources' in result and isinstance(result['sources'], list):
+                final_data['sources'] = result['sources']
+            if 'imageResults' in result:
+                final_data['imageResults'] = result['imageResults']
+            if 'videoResults' in result:
+                final_data['videoResults'] = result['videoResults']
     else:
         print(f"Tool '{tool_name}' returned unmapped output type '{tool.output_type}'. Handling as generic content.")
         final_data['content'] = f"Tool {tool_name} executed successfully.\n\n<pre>{json.dumps(result, indent=2)}</pre>"

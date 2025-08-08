@@ -159,8 +159,18 @@ class ContextTool(BaseTool):
     def _analyze_youtube_url(self, url: str, prompt: str) -> Dict[str, Any]:
         try:
             transcript_text = self._fetch_youtube_transcript(url)
-            if not transcript_text:
-                return {"error": "Could not retrieve transcript for this YouTube video."}
+            if not transcript_text or len(transcript_text.strip()) < 10:
+                # Fallback to page metadata summary if transcript is not available
+                meta = self._fetch_youtube_metadata(url)
+                if not meta:
+                    return {"error": "Could not retrieve transcript or metadata for this YouTube video."}
+                q = prompt or "Summarize the key points of this video based on its metadata and context. State that the transcript was unavailable."
+                meta_json = json.dumps(meta, indent=2)
+                full_prompt = f"Video URL: {url}\n\nNo transcript was available. Use the following metadata and context to infer content cautiously.\n\nMetadata:\n```json\n{meta_json}\n```\n\nTask: {q}"
+                llm_resp = call_llm(full_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=False)
+                text = llm_resp.json()["candidates"][0]["content"]["parts"][0].get("text", "").strip()
+                return {"action": "analyze_youtube", "url": url, "answer": text, "note": "Transcript unavailable; used metadata fallback."}
+
             q = prompt or "Summarize the key points and answer likely questions about this video."
             full_prompt = f"Video URL: {url}\n\nTranscript (truncated to 12k chars):\n{transcript_text[:12000]}\n\nTask: {q}"
             llm_resp = call_llm(full_prompt, CONVERSATIONAL_API_KEY, CONVERSATIONAL_MODEL, stream=False)
@@ -175,8 +185,31 @@ class ContextTool(BaseTool):
             video_id = self._extract_youtube_id(url)
             if not video_id:
                 return None
-            transcripts = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
-            return "\n".join(item.get('text', '') for item in transcripts if item.get('text'))
+            # Try multiple strategies to improve success rate
+            try:
+                transcripts = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+                return "\n".join(item.get('text', '') for item in transcripts if item.get('text'))
+            except Exception:
+                pass
+
+            # Try listing and picking best available
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                transcript = None
+                try:
+                    transcript = transcript_list.find_manually_created_transcript(['en'])
+                except Exception:
+                    try:
+                        transcript = transcript_list.find_generated_transcript(['en'])
+                    except Exception:
+                        available = list(transcript_list)
+                        transcript = available[0] if available else None
+                if transcript:
+                    transcript_data = transcript.fetch()
+                    return "\n".join([item.get('text', '') for item in transcript_data if item.get('text')])
+            except Exception:
+                pass
+            return None
         except Exception:
             return None
 
@@ -186,11 +219,51 @@ class ContextTool(BaseTool):
             if parsed.hostname in ("youtu.be",):
                 return parsed.path.lstrip("/")
             if parsed.hostname and "youtube.com" in parsed.hostname:
+                # Support /watch?v=, /shorts/, /live/
+                if parsed.path.startswith("/shorts/"):
+                    return parsed.path.split("/shorts/")[-1].split("?")[0]
+                if parsed.path.startswith("/live/"):
+                    return parsed.path.split("/live/")[-1].split("?")[0]
                 qs = parsed.query or ""
                 for part in qs.split("&"):
                     if part.startswith("v="):
                         return part[2:]
             return None
+        except Exception:
+            return None
+
+    def _fetch_youtube_metadata(self, url: str) -> Optional[Dict[str, Any]]:
+        try:
+            # Simple metadata fetch from the watch page
+            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            html = resp.text
+            data = {}
+            try:
+                # OpenGraph tags
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html, "html.parser")
+                og_title = soup.find("meta", property="og:title")
+                og_desc = soup.find("meta", property="og:description")
+                og_image = soup.find("meta", property="og:image")
+                data["title"] = og_title.get("content") if og_title else None
+                data["description"] = og_desc.get("content") if og_desc else None
+                data["thumbnail"] = og_image.get("content") if og_image else None
+            except Exception:
+                pass
+            # Try to parse initial data blob for additional hints
+            import re
+            m = re.search(r"ytInitialPlayerResponse\s*=\s*(\{.*?\})\s*;", html, re.DOTALL)
+            if m:
+                try:
+                    player = json.loads(m.group(1))
+                    microformat = player.get("microformat", {}).get("playerMicroformatRenderer", {})
+                    data["lengthSeconds"] = microformat.get("lengthSeconds")
+                    data["category"] = microformat.get("category")
+                    data["isLive"] = microformat.get("isLiveBroadcast")
+                except Exception:
+                    pass
+            return data or None
         except Exception:
             return None
 

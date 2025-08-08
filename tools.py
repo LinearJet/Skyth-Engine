@@ -627,15 +627,34 @@ def route_query_to_pipeline(query, chat_history, image_data, file_data, persona_
     if persona_key == 'academic':
         return {"pipeline": "academic_pipeline", "params": {}}
     
-    # If a URL is present, it's a strong signal for a specific tool.
+        # Heuristic: detect multi-step / multi-tool intent and route to agent
+    try:
+        normalized_q = re.sub(r"\s+", " ", query.lower()).strip()
+        multi_step_markers = [
+            " and then ", " then ", " first ", " after that ", " next, ", " step-by-step ",
+            " multi-step ", " use multiple tools ", " autonomous agent ", " plan the steps ",
+        ]
+        action_pair_patterns = [
+            r"\b(research|search|collect|extract|scrape)\b.*\b(write|summarize|create|generate|produce)\b",
+            r"\b(compare|analyze)\b.*\b(report|summary|table|visual|chart)\b",
+            r"\b(generate|create)\b.*\b(file|pdf|html|markdown|slides?)\b",
+        ]
+        is_multi_step = any(marker in normalized_q for marker in multi_step_markers) or any(re.search(p, normalized_q) for p in action_pair_patterns)
+    except Exception:
+        is_multi_step = False
+
+    # If a URL is present, it's a strong signal for a specific tool unless the task is multi-step, in which case prefer the agent.
     url_pattern = r'https?:\/\/[^\s]+'
     url_match = re.search(url_pattern, query.strip())
-    if url_match:
+    if url_match and not is_multi_step:
         url = url_match.group(0)
         if "youtube.com" in url or "youtu.be" in url:
             return {"pipeline": "youtube_transcript_getter", "params": {"video_url": url}}
         else:
             return {"pipeline": "url_parser", "params": {"url": url}}
+
+    if is_multi_step:
+        return {"pipeline": "agent", "params": {}}
 
     history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-6:]])
 
@@ -659,9 +678,10 @@ You are an expert routing agent. Your task is to analyze the user's **current qu
 2.  If the query directly implies a tool (e.g., "generate an image", "find pictures of", "what is this stock doing?"), choose that specific tool.
 3.  If a file or image is in context and the query is a question, assume the query is about that file/image and choose the 'image_analysis' or 'file_analysis' pipeline.
 4.  For general knowledge questions, prefer 'general_research'. For simple requests, prefer 'conversational'.
-5.  Choose exactly one tool/pipeline from the list.
-6.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the 'name' of the chosen tool/pipeline) and "params" (an object containing the required parameters for that choice).
-7.  If no specific parameters are needed, "params" should be an empty object {{}}.
+5.  If the task likely requires using multiple tools or multi-step planning (e.g., "research X then create Y"), choose 'agent'.
+6.  Choose exactly one tool/pipeline from the list.
+7.  Your output **MUST** be a single, valid JSON object with two keys: "pipeline" (the 'name' of the chosen tool/pipeline) and "params" (an object containing the required parameters for that choice).
+8.  If no specific parameters are needed, "params" should be an empty object {{}}.
 
 **JSON Output:**
 """

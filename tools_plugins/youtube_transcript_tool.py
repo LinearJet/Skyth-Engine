@@ -36,8 +36,8 @@ class YoutubeTranscriptTool(BaseTool):
                 return {"error": "Could not extract video ID from URL."}
             video_id = video_id_match.group(1)
 
-            ytt_api = YouTubeTranscriptApi()
-            transcript_list = ytt_api.list(video_id)
+            # Use the static API for listing transcripts per library docs
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
 
             transcript = None
             try:
@@ -46,11 +46,16 @@ class YoutubeTranscriptTool(BaseTool):
                 try:
                     transcript = transcript_list.find_generated_transcript(['en'])
                 except Exception:
-                    transcript = next(iter(transcript_list))
+                    try:
+                        transcript = next(iter(transcript_list))
+                    except Exception:
+                        transcript = None
 
+            if not transcript:
+                return {"error": "No transcript available for this video (may be disabled or restricted)."}
             transcript_data = transcript.fetch()
             
-            full_transcript = " ".join([item.text for item in transcript_data])
+            full_transcript = " ".join([item.get('text', '') for item in transcript_data])
             print(f"[YouTube Transcript Tool] Fetched transcript of length: {len(full_transcript)} characters.")
             return {"transcript": full_transcript}
         except Exception as e:
