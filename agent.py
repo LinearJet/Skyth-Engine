@@ -40,15 +40,6 @@ def _create_model_response_summary(tool_name: str, tool_output: Any, original_to
         options = ", ".join([f"'{opt}'" for opt in tool_output.get('options', [])])
         return f"Tool '{tool_name}' found multiple possible documents: {options}. The agent must now ask the user to clarify which one they want."
 
-    # --- THE DEFINITIVE FIX IS HERE ---
-    # If the tool returns text_content (like the docs reader), pass the ENTIRE content back.
-    # This is the key to unlocking the model's analytical capabilities.
-    if original_tool and original_tool.output_type == 'text_content' and isinstance(tool_output, dict) and 'content' in tool_output:
-        doc_name = tool_output.get('document_name', 'the document')
-        full_content = tool_output['content']
-        return f"Successfully read the content from '{doc_name}'. The full text is now available for analysis:\n\n---\n{full_content}\n---"
-    # --- END OF FIX ---
-
     output_type = original_tool.output_type if original_tool else 'unknown'
 
     if output_type in ['web_search_results', 'video_search_results', 'image_search_results']:
@@ -62,12 +53,19 @@ def _create_model_response_summary(tool_name: str, tool_output: Any, original_to
         else:
             return f"Tool '{tool_name}' returned no results."
 
+    if output_type == 'text_content' and isinstance(tool_output, dict) and 'content' in tool_output:
+        doc_name = tool_output.get('document_name', 'the document')
+        return f"Successfully read the content from '{doc_name}'. The full text is now available for analysis."
+
+    if isinstance(tool_output, str) and len(tool_output) > 500:
+        return f"Tool '{tool_name}' returned a text of {len(tool_output)} characters. The full content is now available for other tools like 'artifact_creator'."
+
     if output_type == 'downloadable_file':
         filename = tool_output.get('filename', 'file')
         return f"Tool '{tool_name}' successfully created the file '{filename}'. The user can now download it."
 
     if isinstance(tool_output, (dict, list)):
-        return f"Tool '{tool_name}' returned a JSON object with keys: {list(tool_output.keys()) if isinstance(tool_output, dict) else 'N/A'}. The content is now available."
+        return json.dumps(tool_output, indent=2)
     
     return str(tool_output)
 
@@ -96,16 +94,26 @@ class Agent:
         system_instruction = (
             "You are an advanced AI agent. Your primary goal is to use the provided tools to fulfill the user's request. "
             "**Core Principles:**"
-            "1.  **Think Step-by-Step:** Always form a plan before acting. "
-            "2.  **Tool Selection:** Choose the most appropriate tool for the user's immediate goal. "
+            "1.  **Prioritize Tools Over Knowledge:** You MUST prioritize using a tool to fetch real-world, real-time, or user-specific data. DO NOT use your internal knowledge or make up information for things that a tool can answer. This is your most important rule. "
+            "2.  **Think Step-by-Step:** Always form a plan before acting. "
             "3.  **Conversational Context:** Pay close attention to the entire conversation. The user's latest message is often a response to your previous one. "
             
             "**Critical Workflows:**"
-            "1.  **Date & Time Handling:** You are aware of the current date and time. When a user provides a relative time (e.g., 'tomorrow at 4pm', 'a week later on Sunday'), you MUST calculate the full, absolute date and time and convert it to a precise ISO 8601 string (e.g., '2025-08-25T15:00:00') before calling any tool. You must also pass the user's timezone. "
-            "2.  **Document Retrieval:** When a user asks to retrieve a document (e.g., 'find my story', 'pull up the notes'), use the `google_docs_find_and_read` tool. Extract the key nouns and topics from their request to use as `search_keywords`. "
-            "3.  **Handling Clarification:** If a tool returns a list of options for the user to clarify (e.g., multiple documents found), you MUST present these options to the user. Then, you MUST use their next response to select an option and call the appropriate tool again with the clarified information. "
-            "4.  **Document Analysis:** After successfully reading a document with a tool, your task is to act as an expert editor. Provide a comprehensive, insightful, and constructive analysis. Do not just summarize. Identify themes, suggest improvements, and use markdown for clarity. "
-            "5.  **Artifact Creation:** If the user asks to create a file from content, first generate the content as a text response. In the next turn, call the `artifact_creator` tool to save that content."
+            "1.  **Email Handling (NON-NEGOTIABLE WORKFLOW):**"
+            "    - **Scenario 1: General Request (e.g., 'summarize my inbox').** Your plan MUST be to call `gmail_list_threads` and then present the results to the user to await clarification. "
+            "    - **Scenario 2: Specific Request (e.g., 'summarize the email from ACLU', 'elaborate on the second one').** Your plan MUST be a two-step tool call in the SAME turn: "
+            "        - **Step 1: ALWAYS call `gmail_list_threads` first.** Use the user's keywords (e.g., 'from:ACLU') in the `query` parameter to find the relevant email. This step is MANDATORY to get the current, correct `thread_id`. "
+            "        - **Step 2: Immediately call `gmail_read_email` in the same plan.** You MUST take the `thread_id` from the result of the first tool call and use it as the input for this second tool call. "
+            "    - **You are FORBIDDEN from ever calling `gmail_read_email` by itself. It MUST always be preceded by a `gmail_list_threads` call in the same plan.** "
+            "2.  **Date & Time Handling:** You are aware of the current date and time. When a user provides a relative time (e.g., 'tomorrow at 4pm', 'a week later on Sunday'), you MUST calculate the full, absolute date and time and convert it to a precise ISO 8601 string (e.g., '2025-08-25T15:00:00') before calling any tool. You must also pass the user's timezone. "
+            "3.  **Document Retrieval:** When a user asks to retrieve a document (e.g., 'find my story', 'pull up the notes'), use the `google_docs_find_and_read` tool. Extract the key nouns and topics from their request to use as `search_keywords`. "
+            "4.  **Document Creation:** When a user asks to 'create a new doc' or 'make a new document', use the `google_docs_create` tool. When they ask to 'create a new sheet' or 'make a spreadsheet', use the `google_sheets_create` tool. Extract the title from the user's request. "
+            "5.  **Document Appending:** When a user asks to 'add to', 'append', or 'update' a document, use the `google_docs_append_text` tool. You must determine the document name and the exact text to append. Always start the appended text with a newline character '\\n' for proper formatting. "
+            "6.  **Spreadsheet Writing:** When a user asks to add data to a sheet, use the `google_sheets_write` tool. You MUST convert the user's data into a JSON string representing a list of lists. For example, 'add Name and Score as headers, then Alice with 100' becomes the JSON string `'[[\"Name\", \"Score\"], [\"Alice\", 100]]'`. "
+            "7.  **Task Management:** When a user asks to be reminded, add a to-do, or create a task, use the `google_tasks_create` tool. When they ask what's on their list, use `google_tasks_list`. "
+            "8.  **Handling Clarification:** If a tool returns a list of options for the user to clarify (e.g., multiple documents found), you MUST present these options to the user. Then, you MUST use their next response to select an option and call the appropriate tool again with the clarified information. "
+            "9.  **Document Analysis:** After successfully reading a document with a tool, your task is to act as an expert editor. Provide a comprehensive, insightful, and constructive analysis. Do not just summarize. Identify themes, suggest improvements, and use markdown for clarity. "
+            "10. **Artifact Creation:** If the user asks to create a file from content, first generate the content as a text response. In the next turn, call the `artifact_creator` tool to save that content."
         )
         
         conversation = [
@@ -153,6 +161,8 @@ class Agent:
                     conversation.append({"role": "model", "parts": [types.Part(function_call=fc) for fc in function_calls]})
                     
                     tool_response_parts = []
+                    current_turn_raw_results = []
+
                     for call in function_calls:
                         tool_name = call.name
                         args = dict(call.args)
@@ -164,6 +174,7 @@ class Agent:
                         
                         try:
                             result = self.tool_registry.execute_tool(tool_name, user_id=self.user_id, **args)
+                            current_turn_raw_results.append(result)
                             original_tool = self.original_tools.get(tool_name)
 
                             if tool_name == 'google_docs_find_and_read' and isinstance(result, dict) and 'content' in result:
@@ -190,6 +201,27 @@ class Agent:
                                 function_response=types.FunctionResponse(name=tool_name, response={'content': error_message})
                             ))
                     
+                    if any(call.name == 'google_docs_find_and_read' for call in function_calls):
+                        doc_result = next((res for res in current_turn_raw_results if isinstance(res, dict) and 'content' in res), None)
+                        if doc_result:
+                            doc_content = doc_result['content']
+                            analysis_prompt = f"""
+                            The content of the Google Doc has been successfully read. Now, your task is to act as an expert editor and analyst.
+                            Based on the user's original query and the full text of the document provided below, provide a comprehensive, insightful, and constructive analysis.
+                            - Do not just summarize.
+                            - Identify key themes, strengths, and weaknesses.
+                            - Suggest specific, actionable changes to improve the document (e.g., varying sentence structure, enhancing character introductions, elaborating on lore, strengthening motivations).
+                            - Use markdown formatting (like bullet points) to structure your feedback clearly.
+
+                            **User's Original Query:** "{initial_prompt}"
+
+                            **Full Document Content:**
+                            ---
+                            {doc_content}
+                            ---
+                            """
+                            tool_response_parts = [types.Part(text=analysis_prompt)]
+
                     conversation.append({"role": "user", "parts": tool_response_parts})
 
                 else:
