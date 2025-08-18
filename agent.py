@@ -40,6 +40,15 @@ def _create_model_response_summary(tool_name: str, tool_output: Any, original_to
         options = ", ".join([f"'{opt}'" for opt in tool_output.get('options', [])])
         return f"Tool '{tool_name}' found multiple possible documents: {options}. The agent must now ask the user to clarify which one they want."
 
+    # --- THE DEFINITIVE FIX IS HERE ---
+    # If the tool returns text_content (like the docs reader), pass the ENTIRE content back.
+    # This is the key to unlocking the model's analytical capabilities.
+    if original_tool and original_tool.output_type == 'text_content' and isinstance(tool_output, dict) and 'content' in tool_output:
+        doc_name = tool_output.get('document_name', 'the document')
+        full_content = tool_output['content']
+        return f"Successfully read the content from '{doc_name}'. The full text is now available for analysis:\n\n---\n{full_content}\n---"
+    # --- END OF FIX ---
+
     output_type = original_tool.output_type if original_tool else 'unknown'
 
     if output_type in ['web_search_results', 'video_search_results', 'image_search_results']:
@@ -52,14 +61,6 @@ def _create_model_response_summary(tool_name: str, tool_output: Any, original_to
             return summary.strip()
         else:
             return f"Tool '{tool_name}' returned no results."
-
-    if output_type == 'text_content' and isinstance(tool_output, dict) and 'content' in tool_output:
-        doc_name = tool_output.get('document_name', 'the document')
-        content_preview = tool_output['content'][:500]
-        return f"Successfully read the content from '{doc_name}'. The content is now available for analysis. Preview: {content_preview}..."
-
-    if isinstance(tool_output, str) and len(tool_output) > 500:
-        return f"Tool '{tool_name}' returned a text of {len(tool_output)} characters. The full content is now available for other tools like 'artifact_creator'."
 
     if output_type == 'downloadable_file':
         filename = tool_output.get('filename', 'file')
@@ -138,7 +139,6 @@ class Agent:
                     if not chunk.candidates or not chunk.candidates[0].content:
                         continue
                     
-                    # --- NEW: Robustness fix for empty parts ---
                     if chunk.candidates[0].content.parts:
                         for part in chunk.candidates[0].content.parts:
                             if hasattr(part, 'thought') and part.thought:
@@ -147,7 +147,6 @@ class Agent:
                                 function_calls.append(part.function_call)
                             elif part.text:
                                 final_text_response += part.text
-                    # --- END NEW ---
                 
                 if function_calls:
                     yield yield_data('step', {'status': 'acting', 'text': f'Executing {len(function_calls)} tool(s)...'})

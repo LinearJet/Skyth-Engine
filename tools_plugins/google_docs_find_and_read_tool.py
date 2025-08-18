@@ -2,6 +2,32 @@ from basetool import BaseTool
 from typing import Dict, Any, List
 from .google_api_utils import build_google_service
 
+# --- NEW: Robust recursive parser for Google Docs content ---
+def _read_structural_elements(elements: List[Dict[str, Any]]) -> str:
+    """
+    Recursively reads text from a list of structural elements from the Google Docs API.
+    """
+    text = ""
+    for value in elements:
+        if 'paragraph' in value:
+            para_elements = value.get('paragraph').get('elements')
+            for elem in para_elements:
+                if 'textRun' in elem:
+                    text += elem.get('textRun').get('content')
+        elif 'table' in value:
+            # If the element is a table, iterate through its rows and cells
+            table = value.get('table')
+            for row in table.get('tableRows'):
+                for cell in row.get('tableCells'):
+                    # Recursively call this function to read the content of each cell
+                    text += _read_structural_elements(cell.get('content'))
+        elif 'tableOfContents' in value:
+            # Also read the content of a table of contents
+            toc = value.get('tableOfContents')
+            text += _read_structural_elements(toc.get('content'))
+    return text
+# --- END NEW ---
+
 class GoogleDocsFindAndReadTool(BaseTool):
     """
     A tool to intelligently find and read a Google Doc using keywords.
@@ -76,14 +102,11 @@ class GoogleDocsFindAndReadTool(BaseTool):
             )
 
             document = docs_service.documents().get(documentId=document_id).execute()
-            content = document.get('body').get('content')
             
-            text_content = ""
-            for element in content:
-                if 'paragraph' in element:
-                    for para_element in element.get('paragraph').get('elements'):
-                        if 'textRun' in para_element:
-                            text_content += para_element.get('textRun').get('content')
+            # --- NEW: Use the robust parser ---
+            doc_content = document.get('body').get('content')
+            text_content = _read_structural_elements(doc_content)
+            # --- END NEW ---
             
             return {
                 "document_name": document_name,
