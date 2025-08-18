@@ -49,9 +49,11 @@ def run_agent_pipeline(query, persona_name, api_key, model_config, chat_history,
     """
     yield yield_data('step', {'status': 'info', 'text': 'Activating Agentic Mode...'})
     try:
+        user_id = kwargs.get('user_id')
+        timezone = kwargs.get('timezone') # <-- TIMEZONE FIX
         # The agent uses the high-capability reasoning model and its corresponding API key
-        agent = Agent(api_key=REASONING_API_KEY, tools=registry.get_all_tools())
-        yield from agent.run(query, chat_history)
+        agent = Agent(api_key=REASONING_API_KEY, tools=registry.get_all_tools(), user_id=user_id)
+        yield from agent.run(query, chat_history, timezone=timezone) # <-- TIMEZONE FIX
     except Exception as e:
         error_msg = f"Failed to initialize or run the agent: {e}"
         yield yield_data('step', {'status': 'error', 'text': error_msg})
@@ -82,6 +84,11 @@ def run_generic_tool_pipeline(query, persona_name, api_key, model_config, chat_h
     yield yield_data('step', {'status': 'thinking', 'text': f'Executing tool: {tool.name}...'})
     
     tool_params = kwargs.get('params', {})
+    # Pass user_id and timezone to the tool if they exist in kwargs
+    if 'user_id' in kwargs:
+        tool_params['user_id'] = kwargs['user_id']
+    if 'timezone' in kwargs:
+        tool_params['timezone'] = kwargs['timezone'] # <-- TIMEZONE FIX
     if 'image_data' in (p['name'] for p in tool.parameters):
         tool_params['image_data'] = kwargs.get('image_data')
     if 'file_data' in (p['name'] for p in tool.parameters):
@@ -111,16 +118,20 @@ def run_generic_tool_pipeline(query, persona_name, api_key, model_config, chat_h
         'video_search_results': {'ui_event': 'video_search_results', 'data_key': 'videoResults', 'is_list': False},
         'web_search_results': {'ui_event': 'sources', 'data_key': 'sources', 'is_list': False},
         'downloadable_file': {'ui_event': 'downloadable_file', 'data_key': 'artifacts', 'is_list': True},
+        'text_response': {'ui_event': None, 'data_key': None, 'is_list': False}, # <-- LOG MESSAGE FIX
     }
     
     mapping = output_mapping.get(tool.output_type)
     if mapping:
-        yield yield_data(mapping['ui_event'], result)
-        if mapping['is_list']:
-            final_data[mapping['data_key']].append(result)
-        else:
-            final_data[mapping['data_key']] = result
+        if mapping['ui_event']: # Only yield if there's a UI event to trigger
+            yield yield_data(mapping['ui_event'], result)
+        if mapping['data_key']: # Only add to final_data if a key is specified
+            if mapping['is_list']:
+                final_data[mapping['data_key']].append(result)
+            else:
+                final_data[mapping['data_key']] = result
     else:
+        # This block now correctly handles truly unmapped types
         print(f"Tool '{tool_name}' returned unmapped output type '{tool.output_type}'. Handling as generic content.")
         final_data['content'] = f"Tool {tool_name} executed successfully.\n\n<pre>{json.dumps(result, indent=2)}</pre>"
 

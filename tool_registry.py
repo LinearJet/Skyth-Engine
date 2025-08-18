@@ -1,5 +1,6 @@
 import os
 import importlib
+import inspect
 from typing import Dict, List, Optional
 from basetool import BaseTool
 
@@ -49,12 +50,32 @@ class ToolRegistry:
 
     def execute_tool(self, name: str, **kwargs) -> any:
         """
-        Executes a tool with the given parameters.
+        Executes a tool with the given parameters, intelligently filtering kwargs
+        based on whether the tool's execute method accepts a variable keyword argument (**kwargs).
         """
         tool = self.get_tool(name)
         if not tool:
             raise ValueError(f"Tool '{name}' not found.")
-        return tool.execute(**kwargs)
+
+        # --- FINAL, ROBUST ARGUMENT HANDLING ---
+        sig = inspect.signature(tool.execute)
+        
+        # Check if the tool's execute method has a **kwargs parameter
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+
+        if has_var_keyword:
+            # If the tool is flexible (has **kwargs), pass all arguments through.
+            # This allows tools to receive context like user_id and timezone.
+            return tool.execute(**kwargs)
+        else:
+            # If the tool is strict (no **kwargs), filter to only the accepted parameters.
+            # This prevents TypeErrors for tools like web_search.
+            accepted_params = sig.parameters.keys()
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_params}
+            return tool.execute(**filtered_kwargs)
+        # --- END FINAL FIX ---
 
 # Example usage:
 if __name__ == "__main__":

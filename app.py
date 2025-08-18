@@ -12,6 +12,7 @@ import shutil # For backing up the database
 from flask import request, Response, stream_with_context, send_from_directory, render_template, jsonify, session, url_for, redirect
 from flask_cors import CORS
 from tinydb import Query
+from werkzeug.middleware.proxy_fix import ProxyFix # <-- IMPORT PROXYFIX
 
 from config import app, DATABASE, CONVERSATIONAL_MODEL, REASONING_MODEL, VISUALIZATION_MODEL, CONVERSATIONAL_API_KEY, REASONING_API_KEY, VISUALIZATION_API_KEY, UTILITY_API_KEY, UTILITY_MODEL, EDGE_TTS_VOICE_MAPPING, CATEGORIES, ARTICLE_LIST_CACHE_DURATION, CACHE, oauth, USER_DB
 from tools import (
@@ -25,7 +26,7 @@ from pipelines import (
     run_deep_research_pipeline, run_image_analysis_pipeline,
     run_file_analysis_pipeline,
     run_stock_pipeline, yield_data, run_generic_tool_pipeline,
-    run_agent_pipeline  # <-- IMPORT THE NEW AGENT PIPELINE
+    run_agent_pipeline
 )
 from academic import run_academic_pipeline
 from coding import run_coding_pipeline
@@ -37,6 +38,11 @@ from tool_registry import ToolRegistry
 
 # Apply CORS to the app object from config
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# --- NEW: Add ProxyFix middleware for correct URL scheme in production ---
+# This tells the app to trust the X-Forwarded-Proto header from a proxy (like Nginx).
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+# --- END NEW ---
 
 # Instantiate the tool registry for use in API endpoints and the main search function
 registry = ToolRegistry()
@@ -127,6 +133,7 @@ def search(): # This is now a REGULAR function, not a generator
     file_data = data.get('file_data')
     file_name = data.get('file_name')
     chat_id = data.get('chat_id')
+    timezone = data.get('timezone', 'UTC') # <-- TIMEZONE FIX
 
     if not user_query and not image_data and not file_data:
         return Response(json.dumps({'error': 'No query, image, or file provided.'}), status=400, mimetype='application/json')
@@ -256,8 +263,10 @@ def search(): # This is now a REGULAR function, not a generator
             pipeline_func = specialized_pipelines.get(query_profile_type, run_default_pipeline)
 
         pipeline_kwargs = {
+            "user_id": user_id,
             "image_data": image_data, "file_data": file_data, "file_name": file_name,
-            "params": pipeline_params # Pass the router's params to the pipeline
+            "params": pipeline_params,
+            "timezone": timezone # <-- TIMEZONE FIX
         }
 
         final_query = user_query # The generic pipeline gets the original query for its acknowledgment prompt
@@ -574,7 +583,8 @@ def track_interaction():
 @app.route('/login')
 def login():
     redirect_uri = url_for('oauth2callback', _external=True)
-    return oauth.google.authorize_redirect(redirect_uri)
+    # <-- FINAL FIX: Pass both prompt and access_type here
+    return oauth.google.authorize_redirect(redirect_uri, prompt='consent', access_type='offline')
     
 @app.route('/oauth2callback')
 def oauth2callback():
@@ -584,12 +594,38 @@ def oauth2callback():
     
     conn = get_db_connection()
     user = conn.execute('SELECT * FROM users WHERE username = ?', (user_info['email'],)).fetchone()
+    
     if user is None:
         conn.execute('INSERT INTO users (username, password) VALUES (?, ?)', (user_info['email'], 'dummy_password'))
         conn.commit()
         user = conn.execute('SELECT * FROM users WHERE username = ?', (user_info['email'],)).fetchone()
-    conn.close()
     
+    # --- NEW: Store the tokens in the database ---
+    access_token = token.get('access_token')
+    refresh_token = token.get('refresh_token')
+    expires_at = token.get('expires_at')
+
+    # The refresh_token is only sent the first time the user grants offline access.
+    # We must be careful not to overwrite an existing refresh_token with None.
+    if refresh_token:
+        conn.execute(
+            'UPDATE users SET google_access_token = ?, google_refresh_token = ?, google_token_expires_at = ? WHERE id = ?',
+            (access_token, refresh_token, expires_at, user['id'])
+        )
+        conn.commit()
+        print(f"Stored new refresh token for user {user['id']}.")
+    else:
+        conn.execute(
+            'UPDATE users SET google_access_token = ?, google_token_expires_at = ? WHERE id = ?',
+            (access_token, expires_at, user['id'])
+        )
+        conn.commit()
+        # --- FIX: Add logging to see when a refresh token is NOT received ---
+        print(f"WARNING: No refresh token received for user {user['id']}. Only updated access token.")
+    
+    conn.close()
+    # --- END NEW ---
+
     session['user'] = {
         'id': user['id'],
         'email': user['username'],
@@ -749,22 +785,36 @@ def init_db():
 
     schema_is_valid = False
     if os.path.exists(db_path):
+        users_schema_valid = False
+        resource_memory_schema_valid = False
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            # Check for the existence and structure of a critical table from the new schema
-            cursor.execute("PRAGMA table_info(resource_memory);")
-            columns = [row[1] for row in cursor.fetchall()]
-            # Check for specific columns that were added in the new schema
-            if 'content' in columns and 'resource_type' in columns:
-                schema_is_valid = True
-                print("✅ Database schema appears up-to-date.")
+            
+            # Check users table
+            cursor.execute("PRAGMA table_info(users);")
+            user_columns = [row[1] for row in cursor.fetchall()]
+            if 'google_refresh_token' in user_columns:
+                users_schema_valid = True
             else:
-                 print("⚠️ Database schema is outdated (missing columns in 'resource_memory').")
+                print("⚠️ Database schema is outdated (missing columns in 'users').")
+
+            # Check resource_memory table
+            cursor.execute("PRAGMA table_info(resource_memory);")
+            resource_columns = [row[1] for row in cursor.fetchall()]
+            if 'content' in resource_columns and 'resource_type' in resource_columns:
+                resource_memory_schema_valid = True
+            else:
+                print("⚠️ Database schema is outdated (missing columns in 'resource_memory').")
+
             conn.close()
-        except sqlite3.OperationalError:
-            # This happens if the table 'resource_memory' doesn't exist at all
-            print("⚠️ Database schema is outdated ('resource_memory' table is missing).")
+            
+            schema_is_valid = users_schema_valid and resource_memory_schema_valid
+            if schema_is_valid:
+                print("✅ Database schema appears up-to-date.")
+
+        except sqlite3.OperationalError as e:
+            print(f"⚠️ Database schema is outdated or tables are missing ({e}).")
         except Exception as e:
             print(f"❌ Error checking database schema: {e}")
     else:

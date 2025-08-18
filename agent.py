@@ -36,6 +36,10 @@ def _create_model_response_summary(tool_name: str, tool_output: Any, original_to
     if isinstance(tool_output, dict) and 'error' in tool_output:
         return f"Tool '{tool_name}' failed with error: {tool_output['error']}"
 
+    if isinstance(tool_output, dict) and 'clarification_needed' in tool_output:
+        options = ", ".join([f"'{opt}'" for opt in tool_output.get('options', [])])
+        return f"Tool '{tool_name}' found multiple possible documents: {options}. The agent must now ask the user to clarify which one they want."
+
     output_type = original_tool.output_type if original_tool else 'unknown'
 
     if output_type in ['web_search_results', 'video_search_results', 'image_search_results']:
@@ -48,6 +52,11 @@ def _create_model_response_summary(tool_name: str, tool_output: Any, original_to
             return summary.strip()
         else:
             return f"Tool '{tool_name}' returned no results."
+
+    if output_type == 'text_content' and isinstance(tool_output, dict) and 'content' in tool_output:
+        doc_name = tool_output.get('document_name', 'the document')
+        content_preview = tool_output['content'][:500]
+        return f"Successfully read the content from '{doc_name}'. The content is now available for analysis. Preview: {content_preview}..."
 
     if isinstance(tool_output, str) and len(tool_output) > 500:
         return f"Tool '{tool_name}' returned a text of {len(tool_output)} characters. The full content is now available for other tools like 'artifact_creator'."
@@ -67,51 +76,55 @@ class Agent:
     An autonomous agent that uses the Gemini 2.5 thinking process to plan,
     execute tasks with multiple tools, and synthesize results in a continuous loop.
     """
-    def __init__(self, api_key: str, tools: List[BaseTool]):
+    def __init__(self, api_key: str, tools: List[BaseTool], user_id: int = None):
         try:
             self.client = genai.Client(api_key=api_key)
             self.model_id = REASONING_MODEL.split('/', 1)[1]
         except Exception as e:
             raise ValueError(f"Failed to initialize Gemini client: {e}")
 
+        self.user_id = user_id
         self.tools = [_convert_basetool_to_gemini_tool(t) for t in tools]
         self.tool_registry = ToolRegistry()
         self.original_tools = {t.name: t for t in tools}
-        print(f"[Agent] Initialized with {len(self.tools)} tools for model '{self.model_id}'.")
+        print(f"[Agent] Initialized with {len(self.tools)} tools for model '{self.model_id}' for user_id: {self.user_id}.")
 
-    def run(self, initial_prompt: str, chat_history: List[dict]):
+    def run(self, initial_prompt: str, chat_history: List[dict], timezone: str = 'UTC'):
         yield yield_data('step', {'status': 'thinking', 'text': 'Activating Agentic Mode. Analyzing request...'})
 
-        formatted_history = []
-        if chat_history:
-            for entry in chat_history:
-                role = "model" if entry["role"] == "assistant" else entry["role"]
-                formatted_history.append({"role": role, "parts": [{"text": entry["content"]}]})
-
-        # --- THE CORE FIX IS IN THIS INSTRUCTION ---
-        instruction = (
+        system_instruction = (
             "You are an advanced AI agent. Your primary goal is to use the provided tools to fulfill the user's request. "
-            "Think step-by-step. First, form a plan. Then, execute the necessary tools. You can call multiple tools in parallel. "
-            "After you get the results, review them and decide if you need to use more tools to complete the user's full request. "
-            "When a tool returns a list of items with URLs, you MUST use those exact URLs in subsequent tool calls. "
-            "**CRITICAL ARTIFACT CREATION WORKFLOW:** If the user asks to create a file from research or synthesized content (like a summary or table), you MUST follow this two-step process: "
-            "1. First, gather all necessary information using your tools. Then, respond with ONLY the formatted text content (e.g., the markdown table, the summary) intended for the file. DO NOT call the artifact_creator tool yet. "
-            "2. After you have outputted the text, in the *next* turn, call the `artifact_creator` tool to save that content. The system will automatically use the text you just generated."
+            "**Core Principles:**"
+            "1.  **Think Step-by-Step:** Always form a plan before acting. "
+            "2.  **Tool Selection:** Choose the most appropriate tool for the user's immediate goal. "
+            "3.  **Conversational Context:** Pay close attention to the entire conversation. The user's latest message is often a response to your previous one. "
+            
+            "**Critical Workflows:**"
+            "1.  **Date & Time Handling:** You are aware of the current date and time. When a user provides a relative time (e.g., 'tomorrow at 4pm', 'a week later on Sunday'), you MUST calculate the full, absolute date and time and convert it to a precise ISO 8601 string (e.g., '2025-08-25T15:00:00') before calling any tool. You must also pass the user's timezone. "
+            "2.  **Document Retrieval:** When a user asks to retrieve a document (e.g., 'find my story', 'pull up the notes'), use the `google_docs_find_and_read` tool. Extract the key nouns and topics from their request to use as `search_keywords`. "
+            "3.  **Handling Clarification:** If a tool returns a list of options for the user to clarify (e.g., multiple documents found), you MUST present these options to the user. Then, you MUST use their next response to select an option and call the appropriate tool again with the clarified information. "
+            "4.  **Document Analysis:** After successfully reading a document with a tool, your task is to act as an expert editor. Provide a comprehensive, insightful, and constructive analysis. Do not just summarize. Identify themes, suggest improvements, and use markdown for clarity. "
+            "5.  **Artifact Creation:** If the user asks to create a file from content, first generate the content as a text response. In the next turn, call the `artifact_creator` tool to save that content."
         )
-        # --- END OF FIX ---
         
-        full_prompt = f"{instruction}\n\nUser Query: {initial_prompt}"
+        conversation = [
+            {"role": "user", "parts": [{"text": system_instruction}]},
+            {"role": "model", "parts": [{"text": "Understood. I am ready to assist."}]}
+        ]
         
-        conversation = formatted_history + [{"role": "user", "parts": [{"text": full_prompt}]}]
+        for entry in chat_history:
+            role = "model" if entry["role"] == "assistant" else entry["role"]
+            conversation.append({"role": role, "parts": [{"text": entry["content"]}]})
         
-        results_from_previous_turn = []
-
+        conversation.append({"role": "user", "parts": [{"text": initial_prompt}]})
+        
         try:
             for i in range(10): 
                 yield yield_data('step', {'status': 'thinking', 'text': f'Planning step {i+1}...'})
                 
                 response_stream = self.client.models.generate_content_stream(
-                    model=self.model_id, contents=conversation,
+                    model=self.model_id,
+                    contents=conversation,
                     config=types.GenerateContentConfig(
                         tools=self.tools,
                         thinking_config=types.ThinkingConfig(thinking_budget=8192, include_thoughts=True)
@@ -124,38 +137,44 @@ class Agent:
                 for chunk in response_stream:
                     if not chunk.candidates or not chunk.candidates[0].content:
                         continue
-                    for part in chunk.candidates[0].content.parts:
-                        if hasattr(part, 'thought') and part.thought:
-                            yield yield_data('step', {'status': 'thinking', 'text': part.text})
-                        elif hasattr(part, 'function_call') and part.function_call:
-                            function_calls.append(part.function_call)
-                        elif part.text:
-                            final_text_response += part.text
+                    
+                    # --- NEW: Robustness fix for empty parts ---
+                    if chunk.candidates[0].content.parts:
+                        for part in chunk.candidates[0].content.parts:
+                            if hasattr(part, 'thought') and part.thought:
+                                yield yield_data('step', {'status': 'thinking', 'text': part.text})
+                            elif hasattr(part, 'function_call') and part.function_call:
+                                function_calls.append(part.function_call)
+                            elif part.text:
+                                final_text_response += part.text
+                    # --- END NEW ---
                 
                 if function_calls:
                     yield yield_data('step', {'status': 'acting', 'text': f'Executing {len(function_calls)} tool(s)...'})
                     conversation.append({"role": "model", "parts": [types.Part(function_call=fc) for fc in function_calls]})
                     
                     tool_response_parts = []
-                    current_turn_raw_results = []
-
                     for call in function_calls:
                         tool_name = call.name
                         args = dict(call.args)
                         
-                        if tool_name == 'artifact_creator' and results_from_previous_turn:
-                            yield yield_data('step', {'status': 'info', 'text': 'Assembling content from previous step(s) for file creation.'})
-                            content_to_save = "\n\n---\n\n".join(str(res) for res in results_from_previous_turn if isinstance(res, str))
-                            if not content_to_save:
-                                content_to_save = json.dumps(results_from_previous_turn, indent=2)
-                            args['content'] = content_to_save
-                        
+                        if tool_name == 'google_calendar_create_event' and 'timezone' not in args:
+                            args['timezone'] = timezone
+
                         yield yield_data('step', {'status': 'acting', 'text': f'Calling: {tool_name}({json.dumps(args)})'})
                         
                         try:
-                            result = self.tool_registry.execute_tool(tool_name, **args)
-                            current_turn_raw_results.append(result)
+                            result = self.tool_registry.execute_tool(tool_name, user_id=self.user_id, **args)
                             original_tool = self.original_tools.get(tool_name)
+
+                            if tool_name == 'google_docs_find_and_read' and isinstance(result, dict) and 'content' in result:
+                                doc_source = {
+                                    "type": "google_doc",
+                                    "title": f"Opened Doc: {result.get('document_name', 'Google Doc')}",
+                                    "text": f"Successfully read {len(result['content'])} characters.",
+                                    "url": result.get('url', '#')
+                                }
+                                yield yield_data('sources', [doc_source])
 
                             if original_tool and original_tool.output_type == 'downloadable_file':
                                 yield yield_data('downloadable_file', result)
@@ -173,32 +192,17 @@ class Agent:
                             ))
                     
                     conversation.append({"role": "user", "parts": tool_response_parts})
-                    results_from_previous_turn = current_turn_raw_results
 
                 else:
-                    # The model has returned a text response. This could be the final answer OR the synthesized content for a file.
-                    # We store this text in our working memory for the next potential step.
-                    results_from_previous_turn = [final_text_response]
-                    conversation.append({"role": "model", "parts": [{"text": final_text_response}]})
-
-                    # Now, we need to check if the model intends to do something else, like create a file with this text.
-                    # So we loop again, but first, we yield the text chunk to the UI so the user sees the content.
-                    yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing content...'})
+                    yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing final response...'})
                     for char in final_text_response:
                         yield yield_data('answer_chunk', char)
                         time.sleep(0.005) 
                     
-                    # Add a "user" turn to prompt the model for its next action
-                    conversation.append({"role": "user", "parts": [{"text": "OK, the content has been generated. What is the next step in the plan? If the plan is complete, provide the final summary to the user. If the next step is to create a file, call the artifact_creator tool now."}]})
-                    
-                    # If the model's response was just a simple final answer (e.g., it thinks it's done), we need a way to break the loop.
-                    # A simple heuristic: if the response is short and doesn't look like data to be saved, we can assume it's the end.
-                    # A more robust agent would have the model output a special "finish" token.
-                    if len(function_calls) == 0 and len(final_text_response) < 200 and "file" not in initial_prompt.lower():
-                         final_data = { "content": final_text_response, "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
-                         yield yield_data('final_response', final_data)
-                         yield yield_data('step', {'status': 'done', 'text': 'Agent finished.'})
-                         return
+                    final_data = { "content": final_text_response, "artifacts": [], "sources": [], "suggestions": [], "imageResults": [], "videoResults": [] }
+                    yield yield_data('final_response', final_data)
+                    yield yield_data('step', {'status': 'done', 'text': 'Agent finished.'})
+                    return
 
 
             yield yield_data('step', {'status': 'error', 'text': 'Agent reached maximum steps without finishing.'})

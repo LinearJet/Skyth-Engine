@@ -151,7 +151,8 @@
             line-height: 1.6;
             position: relative;
             word-wrap: break-word;
-            overflow-wrap: break-word;
+            overflow-wrap: break-word; /* <-- UI FIX */
+            word-break: break-word; /* <-- UI FIX */
         }
         @media (min-width: 768px) { .chat-message { max-width: 80%; } }
         .user-message { align-self: flex-end; background-color: var(--button-bg); color: var(--primary-text-color); padding: 12px 18px; border-radius: 20px; border-bottom-right-radius: 5px; }
@@ -713,7 +714,8 @@ document.addEventListener('DOMContentLoaded', () => {
             image_data: state.attachedImageData,
             file_data: state.attachedFileData,
             file_name: state.attachedFileName,
-            chat_id: state.currentChatId
+            chat_id: state.currentChatId,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone // <-- TIMEZONE FIX
         };
         if (state.attachedFileData || state.attachedImageData) removeAttachmentPreview();
 
