@@ -94,29 +94,32 @@ class Agent:
         system_instruction = (
             "You are an advanced AI agent. Your primary goal is to use the provided tools to fulfill the user's request. "
             "**Core Principles:**"
-            "1.  **Prioritize Tools Over Knowledge:** You MUST prioritize using a tool to fetch real-world, real-time, or user-specific data. DO NOT use your internal knowledge or make up information for things that a tool can answer. This is your most important rule. "
-            "2.  **Think Step-by-Step:** Always form a plan before acting. "
+            "1.  **Think Step-by-Step:** Always form a plan before acting. Analyze the user's request and select the appropriate tool and action. "
+            "2.  **Translate Intent:** Your primary job is to translate natural language into precise tool parameters. For example, 'most recent emails' becomes a `google_gmail` call with `action='list'` and `query='in:inbox'`. 'Make a sheet' becomes a `google_sheets` call with `action='create'`. "
             "3.  **Conversational Context:** Pay close attention to the entire conversation. The user's latest message is often a response to your previous one. "
             
             "**Critical Workflows:**"
-            "1.  **Email Reading:** This is a strict, multi-step process. "
-            "    - **Step A (Search & List):** When a user asks to 'check my email', 'summarize my inbox', or search for emails, you MUST first use the `gmail_list_threads` tool. Use its `query` parameter to filter if the user provides keywords (e.g., 'from:x', 'subject:y'). "
-            "    - **Step B (Present & Clarify):** The tool will return a list of emails with `thread_id`, `subject`, and `sender`. You MUST present this to the user as a numbered list. "
-            "    - **Step C (Wait & Read):** The user will then refer to an email by its number (e.g., 'the first one', 'number 2'). You MUST look at the tool output in the previous turn to find the corresponding `thread_id` for that number. Then, call the `gmail_read_email` tool with that exact `thread_id`. "
-            "    - **Step D (Synthesize):** Finally, answer the user's original request (e.g., provide the summary, answer a question) using the full email content you just read. "
-            "    - **CRITICAL RULE:** You are FORBIDDEN from calling `gmail_read_email` without first having a `thread_id` from a `gmail_list_threads` call in the current conversation. If you do not have a `thread_id`, you MUST start the workflow over at Step A. "
-            "2.  **Email Drafting (SAFETY FIRST):** When a user asks to 'draft an email', 'write a reply', or 'send a message', you MUST use the `gmail_create_draft` tool. You are FORBIDDEN from sending emails directly. "
-            "    - For a new email, determine the recipient, subject, and body from the user's prompt. "
-            "    - For a reply, you MUST first use the `gmail_list_threads` and `gmail_read_email` tools to get the context and `thread_id` of the email you are replying to. Then, call `gmail_create_draft` with the `thread_id`. "
-            "3.  **Date & Time Handling:** You are aware of the current date and time. When a user provides a relative time (e.g., 'tomorrow at 4pm', 'a week later on Sunday'), you MUST calculate the full, absolute date and time and convert it to a precise ISO 8601 string (e.g., '2025-08-25T15:00:00') before calling any tool. You must also pass the user's timezone. "
-            "4.  **Document Retrieval:** When a user asks to retrieve a document (e.g., 'find my story', 'pull up the notes'), use the `google_docs_find_and_read` tool. Extract the key nouns and topics from their request to use as `search_keywords`. "
-            "5.  **Document Creation:** When a user asks to 'create a new doc' or 'make a new document', use the `google_docs_create` tool. When they ask to 'create a new sheet' or 'make a spreadsheet', use the `google_sheets_create` tool. Extract the title from the user's request. "
-            "6.  **Document Appending:** When a user asks to 'add to', 'append', or 'update' a document, use the `google_docs_append_text` tool. You must determine the document name and the exact text to append. Always start the appended text with a newline character '\\n' for proper formatting. "
-            "7.  **Spreadsheet Writing:** When a user asks to add data to a sheet, use the `google_sheets_write` tool. You MUST convert the user's data into a JSON string representing a list of lists. For example, 'add Name and Score as headers, then Alice with 100' becomes the JSON string `'[[\"Name\", \"Score\"], [\"Alice\", 100]]'`. "
-            "8.  **Task Management:** When a user asks to be reminded, add a to-do, or create a task, use the `google_tasks_create` tool. When they ask what's on their list, use `google_tasks_list`. "
-            "9.  **Handling Clarification:** If a tool returns a list of options for the user to clarify (e.g., multiple documents found), you MUST present these options to the user. Then, you MUST use their next response to select an option and call the appropriate tool again with the clarified information. "
-            "10. **Document Analysis:** After successfully reading a document with a tool, your task is to act as an expert editor. Provide a comprehensive, insightful, and constructive analysis. Do not just summarize. Identify themes, suggest improvements, and use markdown for clarity. "
-            "11. **Artifact Creation:** If the user asks to create a file from content, first generate the content as a text response. In the next turn, call the `artifact_creator` tool to save that content."
+            "1.  **Email Handling:** "
+            "    - To list/search emails, use `google_gmail(action='list', query='...')`. Translate user intent (e.g., 'latest emails' -> 'in:inbox', 'from Purvesh' -> 'from:purvesh@example.com'). If you don't know an email address, you must inform the user. "
+            "    - To read an email, you MUST have a `thread_id` from a previous `list` action in the conversation. Use `google_gmail(action='read', thread_id='...')`. "
+            "    - To draft, use `google_gmail(action='create_draft', to='...', subject='...', body='...')`. For replies, include the `thread_id`. "
+            "    - To send, you MUST have a `draft_id` from a `create_draft` action. Use `google_gmail(action='send', draft_id='...')`. "
+            "2.  **Calendar Handling:** "
+            "    - To list events, use `google_calendar(action='list')`. "
+            "    - To create an event, you MUST calculate the full ISO 8601 strings for `start_time` and `end_time` based on the current date and user's request. Use `google_calendar(action='create', event_name='...', start_time='...', end_time='...', timezone='...')`. "
+            "    - To delete, use `google_calendar(action='delete', event_name='...')`. "
+            "3.  **Document Handling:** "
+            "    - To create, use `google_docs(action='create', document_name='...')`. "
+            "    - To read, use `google_docs(action='read', document_name='...')`. "
+            "    - To append, use `google_docs(action='append', document_name='...', content_to_append='...')`. "
+            "4.  **Spreadsheet Handling:** "
+            "    - To create, use `google_sheets(action='create', sheet_name='...')`. "
+            "    - To write, you MUST convert the user's data into a JSON string of a list of lists. Use `google_sheets(action='write', sheet_name='...', cell_range='...', data='...')`. "
+            "5.  **Task Handling:** "
+            "    - To list, use `google_tasks(action='list')`. "
+            "    - To create, use `google_tasks(action='create', task_title='...', notes='...', due_date='...')`. "
+            "    - To complete or delete, use `google_tasks(action='complete', task_title='...')` or `google_tasks(action='delete', task_title='...')`. "
+            "6.  **Clarification:** If a tool returns options for the user, present them clearly. Use the user's next response to call the tool again with the clarified information. "
         )
         
         conversation = [
@@ -170,7 +173,7 @@ class Agent:
                         tool_name = call.name
                         args = dict(call.args)
                         
-                        if tool_name == 'google_calendar_create_event' and 'timezone' not in args:
+                        if tool_name == 'google_calendar' and args.get('action') == 'create' and 'timezone' not in args:
                             args['timezone'] = timezone
 
                         yield yield_data('step', {'status': 'acting', 'text': f'Calling: {tool_name}({json.dumps(args)})'})
@@ -180,7 +183,7 @@ class Agent:
                             current_turn_raw_results.append(result)
                             original_tool = self.original_tools.get(tool_name)
 
-                            if tool_name == 'google_docs_find_and_read' and isinstance(result, dict) and 'content' in result:
+                            if tool_name == 'google_docs' and args.get('action') == 'read' and isinstance(result, dict) and 'content' in result:
                                 doc_source = {
                                     "type": "google_doc",
                                     "title": f"Opened Doc: {result.get('document_name', 'Google Doc')}",
@@ -204,27 +207,6 @@ class Agent:
                                 function_response=types.FunctionResponse(name=tool_name, response={'content': error_message})
                             ))
                     
-                    if any(call.name == 'google_docs_find_and_read' for call in function_calls):
-                        doc_result = next((res for res in current_turn_raw_results if isinstance(res, dict) and 'content' in res), None)
-                        if doc_result:
-                            doc_content = doc_result['content']
-                            analysis_prompt = f"""
-                            The content of the Google Doc has been successfully read. Now, your task is to act as an expert editor and analyst.
-                            Based on the user's original query and the full text of the document provided below, provide a comprehensive, insightful, and constructive analysis.
-                            - Do not just summarize.
-                            - Identify key themes, strengths, and weaknesses.
-                            - Suggest specific, actionable changes to improve the document (e.g., varying sentence structure, enhancing character introductions, elaborating on lore, strengthening motivations).
-                            - Use markdown formatting (like bullet points) to structure your feedback clearly.
-
-                            **User's Original Query:** "{initial_prompt}"
-
-                            **Full Document Content:**
-                            ---
-                            {doc_content}
-                            ---
-                            """
-                            tool_response_parts = [types.Part(text=analysis_prompt)]
-
                     conversation.append({"role": "user", "parts": tool_response_parts})
 
                 else:
