@@ -5,7 +5,7 @@ import uuid
 
 class GoogleSlidesTool(BaseTool):
     """
-    A tool for managing Google Slides. It can create presentations, add slides with text, insert images to specific slides, and delete elements.
+    A tool for managing Google Slides. It can create presentations, add slides with text, and insert images.
     The 'action' parameter determines the operation.
     """
 
@@ -15,31 +15,23 @@ class GoogleSlidesTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return (
-            "A comprehensive tool for managing Google Slides presentations. "
-            "It supports the following actions specified by the 'action' parameter:\n"
-            "- 'create': Creates a new presentation with a given name.\n"
-            "- 'add_slide': Adds a new slide with a title and body text to a presentation.\n"
-            "- 'add_image': Adds an image from a URL to a specific slide number.\n"
-            "- 'delete_element': Deletes the first image found on a specific slide number."
-        )
+        return "Manages Google Slides presentations. Use 'create' to make a new presentation, 'add_slide' to add a new slide with a title and body, and 'add_image' to insert an image from a URL onto the last slide."
 
     @property
     def parameters(self) -> List[Dict[str, Any]]:
         return [
-            {"name": "action", "type": "string", "description": "The operation to perform: 'create', 'add_slide', 'add_image', or 'delete_element'."},
+            {"name": "action", "type": "string", "description": "The operation to perform: 'create', 'add_slide', or 'add_image'."},
             {"name": "presentation_name", "type": "string", "description": "The name/title of the presentation. Required for all actions."},
             {"name": "title", "type": "string", "description": "The title for a new slide. Only used with the 'add_slide' action."},
             {"name": "body", "type": "string", "description": "The body text for a new slide, with new lines for bullet points. Only used with 'add_slide' action."},
             {"name": "image_url", "type": "string", "description": "The public URL of the image to insert. Only used with the 'add_image' action."},
-            {"name": "slide_number", "type": "integer", "description": "The 1-based index of the slide to target for 'add_image' or 'delete_element'. Defaults to the last slide if not provided."},
         ]
 
     @property
     def output_type(self) -> str:
         return "json_response"
 
-    def execute(self, action: str, presentation_name: str, title: str = None, body: str = None, image_url: str = None, slide_number: int = None, **kwargs) -> Dict[str, Any]:
+    def execute(self, action: str, presentation_name: str, title: str = None, body: str = None, image_url: str = None, **kwargs) -> Dict[str, Any]:
         user_id = kwargs.get('user_id')
         if not user_id:
             return {"error": "Authentication error: User ID not provided."}
@@ -54,11 +46,9 @@ class GoogleSlidesTool(BaseTool):
             elif action == 'add_image':
                 if not image_url:
                     return {"error": "For 'add_image' action, 'image_url' is required."}
-                return self._add_image(user_id, presentation_name, image_url, slide_number)
-            elif action == 'delete_element':
-                return self._delete_element(user_id, presentation_name, slide_number)
+                return self._add_image(user_id, presentation_name, image_url)
             else:
-                return {"error": f"Invalid action '{action}'. Must be 'create', 'add_slide', 'add_image', or 'delete_element'."}
+                return {"error": f"Invalid action '{action}'. Must be 'create', 'add_slide', or 'add_image'."}
 
         except ConnectionRefusedError as e:
             return {"error": str(e)}
@@ -73,29 +63,6 @@ class GoogleSlidesTool(BaseTool):
         results = drive_service.files().list(q=query, pageSize=1, fields="files(id, name, webViewLink)").execute()
         items = results.get('files', [])
         return items[0] if items else None
-
-    def _get_slide_id_by_number(self, presentation: Dict[str, Any], slide_number: int = None) -> str:
-        """Gets the objectId of a slide by its 1-based index."""
-        slides = presentation.get('slides', [])
-        if not slides:
-            return None
-        if slide_number is None: # Default to the last slide
-            return slides[-1]['objectId']
-        if 1 <= slide_number <= len(slides):
-            return slides[slide_number - 1]['objectId']
-        return None
-
-    def _find_first_image_on_slide(self, presentation: Dict[str, Any], slide_id: str) -> str:
-        """Finds the objectId of the first image on a given slide."""
-        slides = presentation.get('slides', [])
-        for slide in slides:
-            if slide['objectId'] == slide_id:
-                for element in slide.get('pageElements', []):
-                    if 'image' in element.get('elementGroup', {}).get('children', [{}])[0].get('shape', {}):
-                        return element['objectId']
-                    if 'image' in element:
-                        return element['objectId']
-        return None
 
     def _create_presentation(self, user_id: int, title: str) -> Dict[str, Any]:
         drive_service = build_google_service(user_id, 'drive', 'v3', ['https://www.googleapis.com/auth/drive'])
@@ -134,7 +101,7 @@ class GoogleSlidesTool(BaseTool):
         slides_service.presentations().batchUpdate(presentationId=presentation_id, body={'requests': requests}).execute()
         return {"success": f"Successfully added a new slide titled '{title}' to '{presentation_name}'."}
 
-    def _add_image(self, user_id: int, presentation_name: str, image_url: str, slide_number: int = None) -> Dict[str, Any]:
+    def _add_image(self, user_id: int, presentation_name: str, image_url: str) -> Dict[str, Any]:
         drive_service = build_google_service(user_id, 'drive', 'v3', ['https://www.googleapis.com/auth/drive.readonly'])
         presentation_file = self._find_presentation_by_name(drive_service, presentation_name)
         if not presentation_file:
@@ -144,19 +111,20 @@ class GoogleSlidesTool(BaseTool):
         slides_service = build_google_service(user_id, 'slides', 'v1', ['https://www.googleapis.com/auth/presentations'])
 
         presentation = slides_service.presentations().get(presentationId=presentation_id).execute()
-        target_slide_id = self._get_slide_id_by_number(presentation, slide_number)
+        slides = presentation.get('slides', [])
+        if not slides:
+            return {"error": "The presentation has no slides to add an image to."}
         
-        if not target_slide_id:
-            return {"error": f"Could not find slide number {slide_number} in the presentation." if slide_number else "The presentation has no slides."}
-        
+        last_slide_id = slides[-1]['objectId']
         new_image_id = uuid.uuid4().hex
+
         requests = [
             {
                 'createImage': {
                     'objectId': new_image_id,
                     'url': image_url,
                     'elementProperties': {
-                        'pageObjectId': target_slide_id,
+                        'pageObjectId': last_slide_id,
                         'size': {'height': {'magnitude': 200, 'unit': 'PT'}, 'width': {'magnitude': 200, 'unit': 'PT'}},
                         'transform': {'scaleX': 1, 'scaleY': 1, 'translateX': 100, 'translateY': 100, 'unit': 'PT'}
                     }
@@ -165,31 +133,4 @@ class GoogleSlidesTool(BaseTool):
         ]
         
         slides_service.presentations().batchUpdate(presentationId=presentation_id, body={'requests': requests}).execute()
-        slide_num_str = f"slide {slide_number}" if slide_number else "the last slide"
-        return {"success": f"Successfully added an image to {slide_num_str} of '{presentation_name}'."}
-
-    def _delete_element(self, user_id: int, presentation_name: str, slide_number: int = None) -> Dict[str, Any]:
-        drive_service = build_google_service(user_id, 'drive', 'v3', ['https://www.googleapis.com/auth/drive.readonly'])
-        presentation_file = self._find_presentation_by_name(drive_service, presentation_name)
-        if not presentation_file:
-            return {"error": f"Presentation named '{presentation_name}' not found."}
-            
-        presentation_id = presentation_file['id']
-        slides_service = build_google_service(user_id, 'slides', 'v1', ['https://www.googleapis.com/auth/presentations'])
-
-        presentation = slides_service.presentations().get(presentationId=presentation_id).execute()
-        target_slide_id = self._get_slide_id_by_number(presentation, slide_number)
-        
-        if not target_slide_id:
-            return {"error": f"Could not find slide number {slide_number} in the presentation." if slide_number else "The presentation has no slides."}
-
-        image_to_delete_id = self._find_first_image_on_slide(presentation, target_slide_id)
-        if not image_to_delete_id:
-            slide_num_str = f"slide {slide_number}" if slide_number else "the last slide"
-            return {"error": f"No image found on {slide_num_str} to delete."}
-
-        requests = [{'deleteObject': {'objectId': image_to_delete_id}}]
-        slides_service.presentations().batchUpdate(presentationId=presentation_id, body={'requests': requests}).execute()
-        
-        slide_num_str = f"slide {slide_number}" if slide_number else "the last slide"
-        return {"success": f"Successfully deleted the first image from {slide_num_str} of '{presentation_name}'."}
+        return {"success": f"Successfully added an image to the last slide of '{presentation_name}'."}

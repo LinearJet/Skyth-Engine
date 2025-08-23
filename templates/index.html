@@ -45,6 +45,7 @@
             --input-bg: #2a2a2e;
             --button-bg: #3c3c40;
             --border-color: #444;
+            --danger-color: #e57373;
             --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         }
 
@@ -151,8 +152,8 @@
             line-height: 1.6;
             position: relative;
             word-wrap: break-word;
-            overflow-wrap: break-word; /* <-- UI FIX */
-            word-break: break-word; /* <-- UI FIX */
+            overflow-wrap: break-word;
+            word-break: break-word;
         }
         @media (min-width: 768px) { .chat-message { max-width: 80%; } }
         .user-message { align-self: flex-end; background-color: var(--button-bg); color: var(--primary-text-color); padding: 12px 18px; border-radius: 20px; border-bottom-right-radius: 5px; }
@@ -199,8 +200,8 @@
             padding: 12px 15px 8px; position: relative; cursor: pointer; 
             overflow: hidden; transition: transform 0.2s ease-out, box-shadow 0.2s ease-out; 
             margin: 5px 0; max-width: 100%;
-            text-decoration: none; /* For downloadable links */
-            display: block; /* For downloadable links */
+            text-decoration: none;
+            display: block;
         }
         .artifact-thumbnail-container:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.4); }
         .artifact-thumbnail-container::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #252529; border-radius: 16px; transform: translateY(10px); z-index: 1; }
@@ -221,14 +222,14 @@
             overflow: hidden;
             text-overflow: ellipsis;
             min-width: 0;
-            color: var(--primary-text-color); /* Ensure text color is consistent */
+            color: var(--primary-text-color);
         }
         .artifact-thumbnail-header i { color: var(--secondary-text-color); flex-shrink: 0; }
         .artifact-thumbnail-code {
             font-family: 'Courier New', Courier, monospace;
             font-size: 10px;
             color: #9e9e9e;
-            white-space: pre; /* Keep preview on one line */
+            white-space: pre;
             overflow: hidden;
             text-overflow: ellipsis;
             max-height: 40px;
@@ -325,6 +326,51 @@
             animation: spin 1.5s linear infinite;
         }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        /* --- NEW: Confirmation Modal --- */
+        #confirmation-modal-backdrop {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.6); z-index: 4999;
+            display: none; align-items: center; justify-content: center;
+            opacity: 0; transition: opacity 0.3s ease;
+        }
+        #confirmation-modal {
+            background-color: var(--surface-color);
+            padding: 25px; border-radius: 16px;
+            border: 1px solid var(--danger-color);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            text-align: center; max-width: 450px; width: 90%;
+            transform: scale(0.95); transition: transform 0.3s ease;
+        }
+        #confirmation-modal-backdrop.visible { display: flex; opacity: 1; }
+        #confirmation-modal-backdrop.visible #confirmation-modal { transform: scale(1); }
+        #confirmation-modal h2 { font-size: 22px; margin-bottom: 10px; color: var(--danger-color); }
+        #confirmation-modal h2 i { margin-right: 10px; }
+        #confirmation-modal p { color: var(--secondary-text-color); margin-bottom: 20px; line-height: 1.6; }
+        #confirmation-modal code {
+            background-color: var(--input-bg);
+            padding: 4px 8px; border-radius: 6px;
+            font-family: 'Courier New', Courier, monospace;
+            color: var(--primary-text-color);
+        }
+        #confirmation-input {
+            width: 100%; background-color: var(--input-bg);
+            border: 1px solid var(--border-color); border-radius: 8px;
+            padding: 12px; color: var(--primary-text-color);
+            font-size: 16px; margin-bottom: 20px; text-align: center;
+        }
+        #confirmation-input:focus { outline: none; border-color: var(--danger-color); }
+        .confirmation-buttons { display: flex; gap: 15px; justify-content: center; }
+        .confirmation-buttons button {
+            padding: 10px 20px; border-radius: 8px; border: none;
+            font-size: 16px; font-weight: 600; cursor: pointer;
+            transition: background-color 0.2s, transform 0.2s;
+        }
+        #confirm-action-btn { background-color: var(--danger-color); color: var(--bg-color); }
+        #confirm-action-btn:disabled { background-color: #5a5a5e; color: #8a8a8e; cursor: not-allowed; }
+        #cancel-action-btn { background-color: var(--button-bg); color: var(--primary-text-color); }
+        #cancel-action-btn:hover { background-color: #4a4a50; }
+        /* --- END NEW --- */
 
         @media (max-width: 1024px) { #artifact-viewer { width: 60%; } }
         @media (max-width: 768px) { #artifact-viewer { width: 100%; border-left: none; } .user-message .copy-button { display: none; } .chat-message:hover .copy-button { opacity: 0; } }
@@ -444,6 +490,20 @@
         <iframe id="media-viewer-iframe" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
     </div>
 
+    <!-- NEW: Confirmation Modal -->
+    <div id="confirmation-modal-backdrop">
+        <div id="confirmation-modal">
+            <h2><i class="fa-solid fa-triangle-exclamation"></i> Superuser Action Required</h2>
+            <p id="confirmation-prompt-text">This is a potentially destructive action that cannot be undone. To proceed, please type the following command to confirm:</p>
+            <code id="confirmation-command-text">sudo rm -rf "My Important File"</code>
+            <input type="text" id="confirmation-input" placeholder="Type confirmation command here...">
+            <div class="confirmation-buttons">
+                <button id="cancel-action-btn">Cancel</button>
+                <button id="confirm-action-btn" disabled>Confirm</button>
+            </div>
+        </div>
+    </div>
+
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     // --- STATE & CONFIG ---
@@ -457,7 +517,8 @@ document.addEventListener('DOMContentLoaded', () => {
         attachedFileData: null,
         attachedFileName: null,
         currentChatId: null,
-        currentQueryProfile: null
+        currentQueryProfile: null,
+        pendingConfirmation: null // <-- NEW: Store pending action
     };
     let currentArtifact = { code: null, type: null, title: null };
     let chatHistory = [];
@@ -494,6 +555,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const incognitoToggle = document.getElementById('incognito-toggle');
     const sidebarSearch = document.getElementById('sidebar-search');
     const sidebarContextMenu = document.getElementById('sidebar-context-menu');
+    // --- NEW: Confirmation Modal Elements ---
+    const confirmationModalBackdrop = document.getElementById('confirmation-modal-backdrop');
+    const confirmationPromptText = document.getElementById('confirmation-prompt-text');
+    const confirmationCommandText = document.getElementById('confirmation-command-text');
+    const confirmationInput = document.getElementById('confirmation-input');
+    const confirmActionBtn = document.getElementById('confirm-action-btn');
+    const cancelActionBtn = document.getElementById('cancel-action-btn');
     let longPressTimer, contextTargetElement = null, sidebarContextTargetElement = null;
 
     // --- INITIALIZATION & CORE UI FLOW ---
@@ -641,6 +709,14 @@ document.addEventListener('DOMContentLoaded', () => {
     codeViewBtn.addEventListener('click', () => setArtifactViewMode('code'));
     mediaViewerClose.addEventListener('click', hideMediaViewer);
 
+    // --- NEW: Confirmation Modal Listeners ---
+    cancelActionBtn.addEventListener('click', hideConfirmationModal);
+    confirmationInput.addEventListener('input', () => {
+        const requiredText = confirmationCommandText.textContent;
+        confirmActionBtn.disabled = confirmationInput.value !== requiredText;
+    });
+    confirmActionBtn.addEventListener('click', handleConfirmedAction);
+
     // --- CONTEXT MENUS ---
     function showContextMenu(e) {
         e.preventDefault();
@@ -715,7 +791,7 @@ document.addEventListener('DOMContentLoaded', () => {
             file_data: state.attachedFileData,
             file_name: state.attachedFileName,
             chat_id: state.currentChatId,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone // <-- TIMEZONE FIX
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
         };
         if (state.attachedFileData || state.attachedImageData) removeAttachmentPreview();
 
@@ -787,7 +863,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 contentWrapper.insertBefore(createArtifactThumbnail(artifact.type, artifact.content, artifact.title), streamingTextElement);
                                 break;
                             }
-                            case 'downloadable_file': { // <-- THE FIX IS HERE
+                            case 'downloadable_file': {
                                 const artifactData = json.data;
                                 botMessageData.artifacts.push(artifactData);
                                 contentWrapper.insertBefore(createDownloadableArtifactThumbnail(artifactData), streamingTextElement);
@@ -795,6 +871,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             case 'image_search_results': botMessageData.imageResults = json.data; break;
                             case 'video_search_results': botMessageData.videoResults = json.data; break;
+                            case 'user_confirmation_required': // <-- NEW
+                                animator.destroy();
+                                showConfirmationModal(json.data);
+                                return; // Stop processing this stream
                             case 'final_response':
                                 const finalData = json.data;
                                 botMessageData.content = finalData.content || botMessageData.content;
@@ -880,6 +960,9 @@ document.addEventListener('DOMContentLoaded', () => {
         
         messageElement.dataset.rawMarkdown = messageData.content;
         messageElement.appendChild(createCopyButton(messageData.content));
+        
+        // --- NEW: Auto-create artifacts from links ---
+        createArtifactsFromLinks(messageElement);
     }
 
     function appendUserMessage(content, imageData = null, animate = true) {
@@ -1051,7 +1134,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function createDownloadableArtifactThumbnail(artifactData) {
-        const container = document.createElement('a'); // Use an anchor tag for downloads
+        const container = document.createElement('a');
         container.className = 'artifact-thumbnail-container';
         container.href = artifactData.data_uri;
         container.download = artifactData.filename;
@@ -1472,6 +1555,96 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert('Could not delete the chat.');
             }
         }
+    }
+
+    // --- NEW: Confirmation Modal Logic ---
+    function showConfirmationModal(data) {
+        state.pendingConfirmation = data;
+        confirmationPromptText.textContent = data.prompt;
+        confirmationCommandText.textContent = data.confirmation_command;
+        confirmationInput.value = '';
+        confirmActionBtn.disabled = true;
+        confirmationModalBackdrop.classList.add('visible');
+        confirmationInput.focus();
+    }
+
+    function hideConfirmationModal() {
+        confirmationModalBackdrop.classList.remove('visible');
+        state.pendingConfirmation = null;
+    }
+
+    async function handleConfirmedAction() {
+        if (!state.pendingConfirmation) return;
+        
+        const { tool_name, tool_params } = state.pendingConfirmation;
+        hideConfirmationModal();
+
+        const animator = createThinkingAnimator();
+        animator.update(`Executing: ${tool_name}...`);
+
+        try {
+            const response = await fetch('/execute_confirmed_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tool_name, tool_params, chat_id: state.currentChatId })
+            });
+            if (!response.ok) { const errData = await response.json().catch(() => ({error: `HTTP Error ${response.status}`})); throw new Error(errData.error || `HTTP ${response.status} - ${response.statusText}`); }
+            
+            // We expect a simple success/error message back
+            const result = await response.json();
+            animator.destroy();
+            
+            const resultMessage = result.success || `Error: ${result.error}`;
+            const botMessageData = { role: 'assistant', content: resultMessage };
+            renderCompleteBotMessage(botMessageData);
+            chatHistory.push(botMessageData);
+
+        } catch (error) {
+            animator.destroy();
+            const errorMsgData = { role: 'assistant', content: `Sorry, the action failed: <br><pre>${error.message}</pre>` };
+            renderCompleteBotMessage(errorMsgData);
+            chatHistory.push(errorMsgData);
+        }
+    }
+
+    // --- NEW: Artifact Creation from Links ---
+    function createArtifactsFromLinks(messageElement) {
+        const links = messageElement.querySelectorAll('a');
+        links.forEach(link => {
+            const url = link.href;
+            let artifactType = null;
+            let iconClass = 'fa-solid fa-link';
+
+            if (url.includes('docs.google.com/document')) {
+                artifactType = 'google_doc';
+                iconClass = 'fa-solid fa-file-word'; // Or a custom icon
+            } else if (url.includes('docs.google.com/spreadsheets')) {
+                artifactType = 'google_sheet';
+                iconClass = 'fa-solid fa-file-excel';
+            } else if (url.includes('google.com/calendar/event')) {
+                artifactType = 'google_calendar';
+                iconClass = 'fa-solid fa-calendar-days';
+            }
+
+            if (artifactType) {
+                const container = document.createElement('a');
+                container.className = 'artifact-thumbnail-container';
+                container.href = url;
+                container.target = '_blank';
+                container.rel = 'noopener noreferrer';
+                
+                const title = link.textContent.includes('http') ? (messageElement.dataset.rawMarkdown.split('\n')[0] || 'Google Link') : link.textContent;
+                const previewText = new URL(url).hostname;
+
+                container.innerHTML = `<div class="artifact-thumbnail-card"><div class="artifact-thumbnail-header"><span>${escapeHtml(title)}</span><i class="${iconClass}"></i></div><div class="artifact-thumbnail-code">${escapeHtml(previewText)}</div></div>`;
+                
+                // Replace the link's parent paragraph with the artifact
+                const parentP = link.closest('p');
+                if (parentP) {
+                    parentP.parentNode.replaceChild(container, parentP);
+                }
+            }
+        });
     }
 
     // --- KICK THINGS OFF ---

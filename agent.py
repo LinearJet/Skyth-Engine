@@ -92,34 +92,31 @@ class Agent:
         yield yield_data('step', {'status': 'thinking', 'text': 'Activating Agentic Mode. Analyzing request...'})
 
         system_instruction = (
-            "You are an advanced AI agent. Your primary goal is to use the provided tools to fulfill the user's request. "
+            "You are an advanced AI agent with superuser privileges over a user's connected Google Workspace. Your primary goal is to use your powerful tools to fulfill the user's requests. "
             "**Core Principles:**"
             "1.  **Think Step-by-Step:** Always form a plan before acting. Analyze the user's request and select the appropriate tool and action. "
-            "2.  **Translate Intent:** Your primary job is to translate natural language into precise tool parameters. For example, 'most recent emails' becomes a `google_gmail` call with `action='list'` and `query='in:inbox'`. 'Make a sheet' becomes a `google_sheets` call with `action='create'`. "
+            "2.  **Translate Intent:** Your primary job is to translate natural language into precise tool parameters. For example, 'most recent emails' becomes a `google_gmail` call with `action='list'` and `query='in:inbox'`. "
             "3.  **Conversational Context:** Pay close attention to the entire conversation. The user's latest message is often a response to your previous one. "
             
-            "**Critical Workflows:**"
-            "1.  **Email Handling:** "
-            "    - To list/search emails, use `google_gmail(action='list', query='...')`. Translate user intent (e.g., 'latest emails' -> 'in:inbox', 'from Purvesh' -> 'from:purvesh@example.com'). If you don't know an email address, you must inform the user. "
-            "    - To read an email, you MUST have a `thread_id` from a previous `list` action in the conversation. Use `google_gmail(action='read', thread_id='...')`. "
-            "    - To draft, use `google_gmail(action='create_draft', to='...', subject='...', body='...')`. For replies, include the `thread_id`. "
-            "    - To send, you MUST have a `draft_id` from a `create_draft` action. Use `google_gmail(action='send', draft_id='...')`. "
-            "2.  **Calendar Handling:** "
-            "    - To list events, use `google_calendar(action='list')`. "
-            "    - To create an event, you MUST calculate the full ISO 8601 strings for `start_time` and `end_time` based on the current date and user's request. Use `google_calendar(action='create', event_name='...', start_time='...', end_time='...', timezone='...')`. "
-            "    - To delete, use `google_calendar(action='delete', event_name='...')`. "
-            "3.  **Document Handling:** "
-            "    - To create, use `google_docs(action='create', document_name='...')`. "
-            "    - To read, use `google_docs(action='read', document_name='...')`. "
-            "    - To append, use `google_docs(action='append', document_name='...', content_to_append='...')`. "
-            "4.  **Spreadsheet Handling:** "
-            "    - To create, use `google_sheets(action='create', sheet_name='...')`. "
-            "    - To write, you MUST convert the user's data into a JSON string of a list of lists. Use `google_sheets(action='write', sheet_name='...', cell_range='...', data='...')`. "
-            "5.  **Task Handling:** "
-            "    - To list, use `google_tasks(action='list')`. "
-            "    - To create, use `google_tasks(action='create', task_title='...', notes='...', due_date='...')`. "
-            "    - To complete or delete, use `google_tasks(action='complete', task_title='...')` or `google_tasks(action='delete', task_title='...')`. "
-            "6.  **Clarification:** If a tool returns options for the user, present them clearly. Use the user's next response to call the tool again with the clarified information. "
+            "**CRITICAL SUPERUSER WORKFLOW:**"
+            "Actions like deleting data (`delete` actions in any tool) or sending emails (`send` action in `google_gmail`) are considered 'superuser' actions. "
+            "When a user requests a superuser action, you MUST NOT call the tool directly. "
+            "Instead, you MUST respond to the user with a special JSON object of this exact format: "
+            "`{\"user_confirmation_required\": {\"tool_name\": \"...\", \"tool_params\": {...}, \"prompt\": \"...\", \"confirmation_command\": \"...\"}}`"
+            " - `tool_name`: The name of the dangerous tool to be executed (e.g., 'google_calendar')."
+            " - `tool_params`: A JSON object of the parameters for the tool (e.g., `{\"action\": \"delete\", \"event_name\": \"My Meeting\"}`)."
+            " - `prompt`: A clear, user-friendly warning message (e.g., 'This will permanently delete the event \"My Meeting\" from your calendar.')."
+            " - `confirmation_command`: The exact string the user must type to confirm (e.g., 'sudo rm -rf \"My Meeting\"')."
+            "You will then STOP. The system will handle the user confirmation. "
+
+            "**Tool Workflows:**"
+            "1.  **Email:** Use `google_gmail`. Actions: `list`, `read`, `create_draft`, `send` (superuser). For replies, you must first `list` and `read` to get the `thread_id`. "
+            "2.  **Calendar:** Use `google_calendar`. Actions: `list`, `create`, `delete` (superuser). You MUST calculate full ISO 8601 date strings. "
+            "3.  **Documents:** Use `google_docs`. Actions: `create`, `read`, `append`. "
+            "4.  **Spreadsheets:** Use `google_sheets`. Actions: `create`, `write`. For `write`, you MUST format the data as a JSON string of a list of lists. "
+            "5.  **Tasks:** Use `google_tasks`. Actions: `list`, `create`, `delete` (superuser), `complete`. "
+            "6.  **Slides:** Use `google_slides`. Actions: `create`, `add_slide`, `add_image`, `delete_element`. To add or delete on a specific slide, you MUST provide the `slide_number` parameter (e.g., `slide_number=1` for the first slide). "
+            "7.  **Clarification:** If a tool returns options, present them to the user and use their next response to call the tool again with the clarified information. "
         )
         
         conversation = [
@@ -210,6 +207,19 @@ class Agent:
                     conversation.append({"role": "user", "parts": tool_response_parts})
 
                 else:
+                    # --- FINAL FIX: Check for confirmation request before finishing ---
+                    try:
+                        # Attempt to parse the response as JSON
+                        parsed_response = json.loads(final_text_response)
+                        if 'user_confirmation_required' in parsed_response:
+                            print(f"[Agent] Confirmation required: {parsed_response['user_confirmation_required']}")
+                            yield yield_data('user_confirmation_required', parsed_response['user_confirmation_required'])
+                            # Stop the loop and wait for the user
+                            return
+                    except json.JSONDecodeError:
+                        # It's not a JSON confirmation, so it's a regular text response
+                        pass
+
                     yield yield_data('step', {'status': 'thinking', 'text': 'Synthesizing final response...'})
                     for char in final_text_response:
                         yield yield_data('answer_chunk', char)

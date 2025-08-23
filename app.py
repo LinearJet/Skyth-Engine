@@ -133,7 +133,7 @@ def search(): # This is now a REGULAR function, not a generator
     file_data = data.get('file_data')
     file_name = data.get('file_name')
     chat_id = data.get('chat_id')
-    timezone = data.get('timezone', 'UTC') # <-- TIMEZONE FIX
+    timezone = data.get('timezone', 'UTC')
 
     if not user_query and not image_data and not file_data:
         return Response(json.dumps({'error': 'No query, image, or file provided.'}), status=400, mimetype='application/json')
@@ -266,7 +266,7 @@ def search(): # This is now a REGULAR function, not a generator
             "user_id": user_id,
             "image_data": image_data, "file_data": file_data, "file_name": file_name,
             "params": pipeline_params,
-            "timezone": timezone # <-- TIMEZONE FIX
+            "timezone": timezone
         }
 
         final_query = user_query # The generic pipeline gets the original query for its acknowledgment prompt
@@ -339,6 +339,57 @@ def search(): # This is now a REGULAR function, not a generator
     # The search function returns the Response object with the generator
     return Response(stream_with_context(streaming_logic()), mimetype='text/event-stream')
 
+
+# ==============================================================================
+# NEW: SECURE ENDPOINT FOR CONFIRMED ACTIONS
+# ==============================================================================
+@app.route('/execute_confirmed_action', methods=['POST'])
+def execute_confirmed_action():
+    user = session.get('user')
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    tool_name = data.get('tool_name')
+    tool_params = data.get('tool_params')
+    
+    if not tool_name or not tool_params:
+        return jsonify({"error": "Missing tool name or parameters"}), 400
+
+    try:
+        # Add user_id to the parameters for the tool
+        tool_params['user_id'] = user['id']
+        
+        # Execute the tool
+        result = registry.execute_tool(tool_name, **tool_params)
+        
+        # Save the action to chat history
+        chat_id = data.get('chat_id')
+        if chat_id:
+            conn = get_db_connection()
+            try:
+                # Log the confirmation action as a user message
+                user_action_log = f"User confirmed and executed action: {tool_name} with params {json.dumps(tool_params)}"
+                conn.execute(
+                    'INSERT INTO episodic_memory (user_id, chat_id, role, content) VALUES (?, ?, ?, ?)',
+                    (user['id'], chat_id, 'user', user_action_log)
+                )
+                # Log the result as an assistant message
+                assistant_response_log = json.dumps(result)
+                conn.execute(
+                    'INSERT INTO episodic_memory (user_id, chat_id, role, content) VALUES (?, ?, ?, ?)',
+                    (user['id'], chat_id, 'assistant', assistant_response_log)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"Error executing confirmed action: {e}")
+        traceback.print_exc()
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 # ==============================================================================
 # FLASK ROUTING AND SERVER STARTUP
@@ -583,7 +634,6 @@ def track_interaction():
 @app.route('/login')
 def login():
     redirect_uri = url_for('oauth2callback', _external=True)
-    # <-- FINAL FIX: Pass both prompt and access_type here
     return oauth.google.authorize_redirect(redirect_uri, prompt='consent', access_type='offline')
     
 @app.route('/oauth2callback')
@@ -600,13 +650,10 @@ def oauth2callback():
         conn.commit()
         user = conn.execute('SELECT * FROM users WHERE username = ?', (user_info['email'],)).fetchone()
     
-    # --- NEW: Store the tokens in the database ---
     access_token = token.get('access_token')
     refresh_token = token.get('refresh_token')
     expires_at = token.get('expires_at')
 
-    # The refresh_token is only sent the first time the user grants offline access.
-    # We must be careful not to overwrite an existing refresh_token with None.
     if refresh_token:
         conn.execute(
             'UPDATE users SET google_access_token = ?, google_refresh_token = ?, google_token_expires_at = ? WHERE id = ?',
@@ -620,11 +667,9 @@ def oauth2callback():
             (access_token, expires_at, user['id'])
         )
         conn.commit()
-        # --- FIX: Add logging to see when a refresh token is NOT received ---
         print(f"WARNING: No refresh token received for user {user['id']}. Only updated access token.")
     
     conn.close()
-    # --- END NEW ---
 
     session['user'] = {
         'id': user['id'],
