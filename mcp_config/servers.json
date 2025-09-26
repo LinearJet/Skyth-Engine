@@ -1,0 +1,97 @@
+{
+  "servers": {
+    "filesystem": {
+      "name": "filesystem",
+      "command": ["npx", "@modelcontextprotocol/server-filesystem"],
+      "args": ["/tmp"],
+      "env": {},
+      "timeout": 30,
+      "auto_restart": true,
+      "enabled": false,
+      "description": "File system operations - read, write, list files and directories"
+    },
+    "brave_search": {
+      "name": "brave_search",
+      "command": ["npx", "@modelcontextprotocol/server-brave-search"],
+      "args": [],
+      "env": {
+        "BRAVE_API_KEY": ""
+      },
+      "timeout": 30,
+      "auto_restart": true,
+      "enabled": false,
+      "description": "Web search using Brave Search API"
+    },
+    "sqlite": {
+      "name": "sqlite",
+      "command": ["npx", "@modelcontextprotocol/server-sqlite"],
+      "args": [],
+      "env": {},
+      "timeout": 30,
+      "auto_restart": true,
+      "enabled": false,
+      "description": "SQLite database operations"
+    },
+    "postgres": {
+      "name": "postgres",
+      "command": ["npx", "@modelcontextprotocol/server-postgres"],
+      "args": [],
+      "env": {
+        "POSTGRES_CONNECTION_STRING": ""
+      },
+      "timeout": 30,
+      "auto_restart": true,
+      "enabled": false,
+      "description": "PostgreSQL database operations"
+    },
+    "github": {
+      "name": "github",
+      "command": ["npx", "@modelcontextprotocol/server-github"],
+      "args": [],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+      },
+      "timeout": 30,
+      "auto_restart": true,
+      "enabled": false,
+      "description": "GitHub repository operations"
+    },
+    "google_drive": {
+      "name": "google_drive",
+      "command": ["npx", "@modelcontextprotocol/server-google-drive"],
+      "args": [],
+      "env": {
+        "GOOGLE_CLIENT_ID": "",
+        "GOOGLE_CLIENT_SECRET": "",
+        "GOOGLE_REDIRECT_URI": ""
+      },
+      "timeout": 30,
+      "auto_restart": true,
+      "enabled": false,
+      "description": "Google Drive file operations"
+    },
+    "puppeteer": {
+      "name": "puppeteer",
+      "command": ["npx", "@modelcontextprotocol/server-puppeteer"],
+      "args": [],
+      "env": {},
+      "timeout": 60,
+      "auto_restart": true,
+      "enabled": false,
+      "description": "Web scraping and browser automation"
+    }
+  },
+  "migration_settings": {
+    "tool_preferences": {
+      "web_search": "hybrid",
+      "file_operations": "mcp",
+      "database_operations": "mcp",
+      "google_services": "manual",
+      "image_generation": "manual",
+      "specialized_parsing": "manual"
+    },
+    "fallback_enabled": true,
+    "fallback_timeout": 5,
+    "migration_phase": "testing"
+  }
+}
